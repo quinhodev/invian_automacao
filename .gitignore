@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Playwright
+playwright-report/
+test-results/
+
+# Relatórios e prints de erro da automação
+relatorios/
+erros/
+
+# Arquivos Excel temporários
+*.xlsx
+*.xlsm
+
+# Ambiente virtual
+venv/
+env/
+.venv/
+
+# Arquivos temporários
+*.log
+*.tmp

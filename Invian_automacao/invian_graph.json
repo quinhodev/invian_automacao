@@ -1,0 +1,366 @@
+{
+  "nodes": [
+    {
+      "id": "skill_login",
+      "type": "skill",
+      "label": "Login no Invian",
+      "metadata": {},
+      "edges": {
+        "out": [
+          "tela_home"
+        ],
+        "in": []
+      }
+    },
+    {
+      "id": "skill_navegador",
+      "type": "skill",
+      "label": "Criar navegador",
+      "metadata": {},
+      "edges": {
+        "out": [
+          "tela_home"
+        ],
+        "in": []
+      }
+    },
+    {
+      "id": "skill_unidades",
+      "type": "skill",
+      "label": "Abrir tela de Unidades",
+      "metadata": {},
+      "edges": {
+        "out": [],
+        "in": []
+      }
+    },
+    {
+      "id": "skill_processar",
+      "type": "skill",
+      "label": "Processar linha da planilha",
+      "metadata": {},
+      "edges": {
+        "out": [],
+        "in": [
+          "botao_salvar",
+          "planilha_dados"
+        ]
+      }
+    },
+    {
+      "id": "skill_abrir_faces",
+      "type": "skill",
+      "label": "Abrir tela de Faces",
+      "metadata": {},
+      "edges": {
+        "out": [
+          "tela_faces"
+        ],
+        "in": []
+      }
+    },
+    {
+      "id": "skill_processar_face",
+      "type": "skill",
+      "label": "Processar Face (Preços/Anunciantes)",
+      "metadata": {},
+      "edges": {
+        "out": [],
+        "in": [
+          "botao_salvar_precos",
+          "planilha_dados"
+        ]
+      }
+    },
+    {
+      "id": "tela_home",
+      "type": "tela",
+      "label": "Tela Home Invian",
+      "metadata": {},
+      "edges": {
+        "out": [
+          "tela_unidades",
+          "tela_faces"
+        ],
+        "in": [
+          "skill_login",
+          "skill_navegador"
+        ]
+      }
+    },
+    {
+      "id": "tela_unidades",
+      "type": "tela",
+      "label": "Tela de Unidades",
+      "metadata": {},
+      "edges": {
+        "out": [
+          "input_pesquisa"
+        ],
+        "in": [
+          "tela_home"
+        ]
+      }
+    },
+    {
+      "id": "tela_player",
+      "type": "tela",
+      "label": "Cadastro do Player",
+      "metadata": {},
+      "edges": {
+        "out": [
+          "combo_horarios"
+        ],
+        "in": [
+          "input_pesquisa"
+        ]
+      }
+    },
+    {
+      "id": "tela_faces",
+      "type": "tela",
+      "label": "Tela de Faces",
+      "metadata": {},
+      "edges": {
+        "out": [
+          "menu_tres_pontinhos"
+        ],
+        "in": [
+          "tela_home",
+          "skill_abrir_faces"
+        ]
+      }
+    },
+    {
+      "id": "modal_precos",
+      "type": "tela",
+      "label": "Modal Preços",
+      "metadata": {},
+      "edges": {
+        "out": [
+          "input_anunciantes_dia"
+        ],
+        "in": [
+          "opcao_precos"
+        ]
+      }
+    },
+    {
+      "id": "input_pesquisa",
+      "type": "input",
+      "label": "Campo de pesquisa",
+      "metadata": {},
+      "edges": {
+        "out": [
+          "tela_player"
+        ],
+        "in": [
+          "tela_unidades"
+        ]
+      }
+    },
+    {
+      "id": "botao_salvar",
+      "type": "botao",
+      "label": "Botao Salvar",
+      "metadata": {},
+      "edges": {
+        "out": [
+          "skill_processar"
+        ],
+        "in": [
+          "combo_horarios"
+        ]
+      }
+    },
+    {
+      "id": "combo_horarios",
+      "type": "select",
+      "label": "Combo Horarios",
+      "metadata": {},
+      "edges": {
+        "out": [
+          "botao_salvar"
+        ],
+        "in": [
+          "tela_player"
+        ]
+      }
+    },
+    {
+      "id": "menu_tres_pontinhos",
+      "type": "botao",
+      "label": "Menu 3 pontinhos (ações)",
+      "metadata": {},
+      "edges": {
+        "out": [
+          "opcao_precos"
+        ],
+        "in": [
+          "tela_faces"
+        ]
+      }
+    },
+    {
+      "id": "opcao_precos",
+      "type": "botao",
+      "label": "Opção Preços no menu",
+      "metadata": {},
+      "edges": {
+        "out": [
+          "modal_precos"
+        ],
+        "in": [
+          "menu_tres_pontinhos"
+        ]
+      }
+    },
+    {
+      "id": "input_anunciantes_dia",
+      "type": "input",
+      "label": "Campo Anunciantes por dia",
+      "metadata": {},
+      "edges": {
+        "out": [
+          "botao_salvar_precos"
+        ],
+        "in": [
+          "modal_precos"
+        ]
+      }
+    },
+    {
+      "id": "botao_salvar_precos",
+      "type": "botao",
+      "label": "Botão Salvar na modal Preços",
+      "metadata": {},
+      "edges": {
+        "out": [
+          "skill_processar_face"
+        ],
+        "in": [
+          "input_anunciantes_dia"
+        ]
+      }
+    },
+    {
+      "id": "planilha_dados",
+      "type": "documento",
+      "label": "Planilha bancodeDados.xlsx",
+      "metadata": {},
+      "edges": {
+        "out": [
+          "skill_processar",
+          "skill_processar_face"
+        ],
+        "in": []
+      }
+    }
+  ],
+  "edges": {
+    "skill_login": [
+      [
+        "tela_home",
+        "navega_ate_home"
+      ]
+    ],
+    "skill_navegador": [
+      [
+        "tela_home",
+        "inicia_navegador"
+      ]
+    ],
+    "tela_home": [
+      [
+        "tela_unidades",
+        "navega_para_unidades"
+      ],
+      [
+        "tela_faces",
+        "navega_para_faces"
+      ]
+    ],
+    "tela_unidades": [
+      [
+        "input_pesquisa",
+        "pesquisa_player"
+      ]
+    ],
+    "input_pesquisa": [
+      [
+        "tela_player",
+        "abre_cadastro_player"
+      ]
+    ],
+    "tela_player": [
+      [
+        "combo_horarios",
+        "seleciona_horario"
+      ]
+    ],
+    "combo_horarios": [
+      [
+        "botao_salvar",
+        "apresenta_botao_salvar"
+      ]
+    ],
+    "botao_salvar": [
+      [
+        "skill_processar",
+        "salva_alteracoes"
+      ]
+    ],
+    "planilha_dados": [
+      [
+        "skill_processar",
+        "fornece_dados"
+      ],
+      [
+        "skill_processar_face",
+        "fornece_dados_face"
+      ]
+    ],
+    "skill_abrir_faces": [
+      [
+        "tela_faces",
+        "abre_tela_faces"
+      ]
+    ],
+    "tela_faces": [
+      [
+        "menu_tres_pontinhos",
+        "localiza_menu_acao"
+      ]
+    ],
+    "menu_tres_pontinhos": [
+      [
+        "opcao_precos",
+        "abre_menu_precos"
+      ]
+    ],
+    "opcao_precos": [
+      [
+        "modal_precos",
+        "abre_modal_precos"
+      ]
+    ],
+    "modal_precos": [
+      [
+        "input_anunciantes_dia",
+        "exibe_campo_anunciantes"
+      ]
+    ],
+    "input_anunciantes_dia": [
+      [
+        "botao_salvar_precos",
+        "valida_e_salva"
+      ]
+    ],
+    "botao_salvar_precos": [
+      [
+        "skill_processar_face",
+        "confirma_alteracao"
+      ]
+    ]
+  }
+}
