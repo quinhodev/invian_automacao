@@ -1,5 +1,38 @@
 # Correções e melhorias
 
+## v2.2 — Ajustes na criação de unidade Panvel (Aba 1)
+
+### `config.py`
+- **`URL_CRIACAO_UNIDADE`** corrigida: agora aponta para
+  `https://web.invian.net/settings/inventory/units` (tela da lista de unidades),
+  em vez de `/units/create` (que não existia).
+- Adicionadas: `LOCALIZACAO_PADRAO = ""` (TODO: definir valor), `TIPO_ELEMENTO_PADRAO = "Digital"`,
+  `TIPO_UNIDADE_PADRAO = "Painel LED"`.
+
+### `unidade_panvel.py`
+- **`clicar_adicionar_unidade`**: espera `input[placeholder="Pesquisar"]:visible`, depois
+  `get_by_role("button", name=/^\s*Adicionar\s*$/)` com fallbacks
+  (`button:has(mat-icon[data-mat-icon-name="plus"])`, `button.mat-mdc-unelevated-button:has-text("Adicionar")`).
+  Erro claro se não achar.
+- **`_obter_filial(row)`**: retorna `COLUNA_FILIAL` ou `COLUNA_ID` como fallback. Usado na
+  validação de `processar_criacao_unidade_panvel` (remove lista de alternativas improvisada)
+  e em `preparar_sequenciais`.
+- **Helpers por rótulo do mat-form-field**: `_campo`, `_preencher_input`, `_selecionar_opcao`,
+  `_clicar_proximo`. Substituem `_preencher_campo_texto` e `_clicar_aba`.
+- **Aba 1 (Informação Básica)** preenche: Nome (input), Localização (select, `LOCALIZACAO_PADRAO`),
+  Tipo de elemento (select, `TIPO_ELEMENTO_PADRAO`), Tipo de unidade (select, `TIPO_UNIDADE_PADRAO`),
+  Cidade (select, valor da planilha), Endereço (input, coluna "Rua e Número").
+  Remove Filial e Estado do formulário. Nome já formatado (contém `MED-TV_\d+` e "Panvel")
+  é usado como está, sem chamar `_gerar_sequencial`.
+- **Fluxo**: Aba1 → Próximo → Aba2 → Próximo → Aba3 → Próximo → Aba4 → Salvar.
+  Abas 2–4 mantidas com `# TODO: seletores não validados`.
+
+### `.gitignore`
+- Adicionado `.env`.
+
+
+---
+
 ## Novas Funcionalidades (v2.1)
 
 ### Modo Panvel — Criação de Unidade
