@@ -74,7 +74,20 @@ EXIBIR_COLUNAS = False
 URL_HOME            = "https://web.invian.net/home"
 URL_UNIDADES        = "https://web.invian.net/settings/inventory/units"
 URL_FACES           = "https://web.invian.net/settings/inventory/faces"
-URL_CRIACAO_UNIDADE = "https://web.invian.net/settings/inventory/units/create"
+URL_CRIACAO_UNIDADE = "https://web.invian.net/settings/inventory/units"
+
+# ---------------------------------------------------------------------------
+# Padrões de criação de unidade (Aba 1 — Informação Básica)
+# ---------------------------------------------------------------------------
+# LOCALIZACAO_PADRAO: valor a ser selecionado no campo "Localização" (select).
+# TODO: definir o valor exato com o usuário (ex.: uma cidade/filial padrão).
+LOCALIZACAO_PADRAO = ""
+
+# Tipo de elemento padrão para o select "Tipo de elemento".
+TIPO_ELEMENTO_PADRAO = "Digital"
+
+# Tipo de unidade padrão para o select "Tipo de unidade".
+TIPO_UNIDADE_PADRAO = "Painel LED"
 
 # ---------------------------------------------------------------------------
 # Timeouts (em milissegundos)

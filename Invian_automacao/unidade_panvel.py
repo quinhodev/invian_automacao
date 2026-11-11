@@ -30,18 +30,21 @@ from playwright.sync_api import (
 
 from config import (
     COLUNA_CIDADE,
-    COLUNA_ESTADO,
     COLUNA_FILIAL,
     COLUNA_ID,
     COLUNA_LATITUDE,
     COLUNA_LONGITUDE,
     COLUNA_NOME_PLAYER,
     COLUNA_RUA_NUMERO,
+    LOCALIZACAO_PADRAO,
     PREFIXO_PANVEL,
     TAG_NUC_PADRAO,
     TAG_SELF_CHECKOUT,
+    TIPO_ELEMENTO_PADRAO,
+    TIPO_UNIDADE_PADRAO,
     TIMEOUT_ELEMENTO,
     TIMEOUT_NAVEGACAO,
+    TIMEOUT_OVERLAY,
     URL_CRIACAO_UNIDADE,
 )
 from navegador import aguardar_carregamento
@@ -62,6 +65,11 @@ def _obter(row, coluna: str) -> str:
     return texto_celula(row[real]) if real is not None else ""
 
 
+def _obter_filial(row) -> str:
+    """Devolve o valor da coluna Filial, ou da coluna ID se Filial não existir na planilha."""
+    return _obter(row, COLUNA_FILIAL) or _obter(row, COLUNA_ID)
+
+
 def preparar_sequenciais(df) -> None:
     """
     Conta quantas linhas (já filtradas) cada filial tem na planilha e zera o contador.
@@ -70,7 +78,7 @@ def preparar_sequenciais(df) -> None:
     _contador_por_filial.clear()
     _total_por_filial.clear()
     mapa = {chave(c): c for c in df.columns}
-    col = mapa.get(chave(COLUNA_FILIAL))
+    col = mapa.get(chave(COLUNA_FILIAL)) or mapa.get(chave(COLUNA_ID))
     if col is None:
         return
     for valor in df[col]:
@@ -145,22 +153,42 @@ def abrir_tela_criacao_unidade(pagina: Page) -> None:
 
 def clicar_adicionar_unidade(pagina: Page) -> None:
     """
-    Clica no botão 'Adicionar unidade' para abrir o formulário multi-abas.
+    Clica no botão 'Adicionar' para abrir o formulário de criação de unidade.
 
-    Tenta vários seletores comuns para o botão de adicionar.
+    Espera o input de pesquisa da lista de unidades ficar visível (garante que a
+    tela /settings/inventory/units carregou), depois clica no botão com role=button
+    e nome exatamente "Adicionar" (ignorando espaços nas bordas), com fallbacks.
     """
-    seletores = [
-        'button:has-text("Adicionar unidade")',
-        'button:has-text("Adicionar Unidade")',
-        'button:has-text("+ Adicionar")',
-        'button:has-text("Novo")',
-        'button.btn-add',
-        'button[aria-label*="Adicionar" i]',
-        'button[aria-label*="Add" i]',
-    ]
-    botao = primeiro_visivel(pagina, seletores, timeout=TIMEOUT_ELEMENTO)
+    # Aguarda a lista de unidades carregar (input de pesquisa da tabela)
+    try:
+        pagina.locator('input[placeholder="Pesquisar"]').first.wait_for(
+            state="visible", timeout=TIMEOUT_ELEMENTO
+        )
+    except PlaywrightTimeoutError:
+        pass  # segue mesmo assim; o botão pode estar visível sem esse input
+
+    # 1ª tentativa: role=button com nome exatamente "Adicionar"
+    try:
+        botao = pagina.get_by_role("button", name=re.compile(r"^\s*Adicionar\s*$"))
+        botao.wait_for(state="visible", timeout=TIMEOUT_ELEMENTO)
+    except Exception:
+        botao = None
+
+    # Fallbacks
     if botao is None:
-        raise RuntimeError("Botão 'Adicionar unidade' não encontrado na tela.")
+        seletores = [
+            'button:has(mat-icon[data-mat-icon-name="plus"])',
+            'button.mat-mdc-unelevated-button:has-text("Adicionar")',
+            'button.mat-flat-button:has-text("Adicionar")',
+        ]
+        botao = primeiro_visivel(pagina, seletores, timeout=TIMEOUT_ELEMENTO)
+
+    if botao is None:
+        raise RuntimeError(
+            "Botão 'Adicionar' não encontrado na tela de unidades "
+            "(URL: " + str(URL_CRIACAO_UNIDADE) + ")."
+        )
+
     botao.scroll_into_view_if_needed()
     botao.click()
     pagina.wait_for_timeout(1000)
@@ -171,69 +199,192 @@ def clicar_adicionar_unidade(pagina: Page) -> None:
 # Aba 1 — Informação Básica
 # ---------------------------------------------------------------------------
 
-def _preencher_campo_texto(pagina: Page, label: str, valor: str, timeout: int = TIMEOUT_ELEMENTO) -> None:
+# ---------------------------------------------------------------------------
+# Helpers de formulário baseados em RÓTULO do mat-form-field
+# ---------------------------------------------------------------------------
+
+
+def _campo(pagina: Page, rotulo: str):
     """
-    Preenche um campo de texto identificado por label (mat-form-field).
-    Tenta localizar o input associado ao label informado.
+    Devolve o locator do mat-form-field cujo label é exatamente `rotulo`
+    (aceita '*' no final do label).
     """
-    seletores = [
-        f'mat-form-field:has-text("{label}") input',
-        f'mat-form-field:has-text("{label}") mat-select',
-        f'input[placeholder*="{label}" i]',
-        f'input[name*="{label.lower()}" i]',
-        f'input[formcontrolname*="{label.lower()}" i]',
-    ]
-    campo = primeiro_visivel(pagina, seletores, timeout=timeout)
-    if campo is None:
-        raise RuntimeError(f'Campo "{label}" não encontrado para preenchimento.')
-    campo.click()
-    campo.wait_for(state="visible", timeout=timeout)
-    campo.press("Control+A")
-    campo.fill(valor)
+    candidatos = pagina.locator("mat-form-field")
+    total = candidatos.count()
+    for i in range(total):
+        ff = candidatos.nth(i)
+        label_texto = ""
+        for tag in ("mat-label", "label"):
+            el = ff.locator(tag).first
+            if el.count() > 0:
+                try:
+                    label_texto = el.inner_text().strip()
+                    break
+                except Exception:
+                    continue
+        if label_texto == rotulo or label_texto == rotulo + "*":
+            return ff
+    raise RuntimeError(f'mat-form-field com label "{rotulo}" não encontrado.')
+
+
+def _preencher_input(pagina: Page, rotulo: str, valor: str) -> None:
+    """Preenche o input/textarea do mat-form-field identificado pelo rótulo."""
+    campo = _campo(pagina, rotulo)
+    input_loc = campo.locator("input, textarea").first
+    input_loc.wait_for(state="visible", timeout=TIMEOUT_ELEMENTO)
+    input_loc.click()
+    input_loc.press("Control+A")
+    input_loc.fill(valor)
+
+
+def _selecionar_opcao(pagina: Page, rotulo: str, texto: str) -> None:
+    """
+    Abre o mat-select do mat-form-field identificado pelo rótulo, filtra se houver
+    input de busca no overlay e escolhe a mat-option de texto IGUAL (usando web_utils.chave
+    para ignorar acento/caixa). Aceita parcial só se for única; senão RuntimeError
+    listando as opções vistas.
+    """
+    campo = _campo(pagina, rotulo)
+    mat_select = campo.locator("mat-select").first
+    mat_select.wait_for(state="visible", timeout=TIMEOUT_ELEMENTO)
+    mat_select.click()
+
+    # Aguarda o overlay do mat-select abrir
+    overlay = pagina.locator(".mat-mdc-select-panel, .mat-select-panel, .cdk-overlay-pane").first
+    overlay.wait_for(state="visible", timeout=TIMEOUT_OVERLAY)
+
+    # Se há input de busca dentro do overlay, filtra
+    busca = overlay.locator("input")
+    if busca.count() > 0:
+        try:
+            busca.click()
+            busca.press("Control+A")
+            busca.fill(texto)
+            pagina.wait_for_timeout(500)
+        except Exception:
+            pass  # segue sem filtro se não houver input de busca
+
+    # Coleta opções visíveis
+    opcoes_vistas = []
+    opcoes = overlay.locator("mat-option").all()
+    for op in opcoes:
+        try:
+            if op.is_visible():
+                t = op.inner_text().strip()
+                if t:
+                    opcoes_vistas.append(t)
+        except Exception:
+            continue
+
+    alvo = chave(texto)
+
+    # Match exato (ignorando acento/caixa)
+    exatas = [o for o in opcoes_vistas if chave(o) == alvo]
+    if len(exatas) == 1:
+        pagina.locator(f'mat-option:has-text("{exatas[0]}")').first.click()
+        return
+
+    # Match parcial único
+    parciais = [o for o in opcoes_vistas if alvo in chave(o)]
+    if len(parciais) == 1:
+        pagina.locator(f'mat-option:has-text("{parciais[0]}")').first.click()
+        return
+
+    raise RuntimeError(
+        f'Opção "{texto}" não encontrada no select "{rotulo}". '
+        f"Opções vistas: {opcoes_vistas}"
+    )
+
+
+def _clicar_proximo(pagina: Page) -> None:
+    """
+    Clica no botão 'Próximo', esperando até ~6 s ele habilitar.
+    Se não habilitar, levanta RuntimeError (campo obrigatório sem preencher).
+    """
+    import time
+
+    inicio = time.time()
+    while time.time() - inicio < 6:
+        botao = primeiro_visivel(
+            pagina,
+            ['button:has-text("Próximo")', 'button:has-text("Proximo")'],
+            timeout=1000,
+        )
+        if botao is not None:
+            try:
+                if botao.is_enabled():
+                    botao.click()
+                    pagina.wait_for_timeout(800)
+                    return
+            except Exception:
+                pass
+        pagina.wait_for_timeout(500)
+    raise RuntimeError(
+        "O botão 'Próximo' não habilitou — algum campo obrigatório ficou sem preencher."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Aba 1 — Informação Básica
+# ---------------------------------------------------------------------------
 
 
 def preencher_informacao_basica(pagina: Page, row, log=print) -> None:
     """
     Preenche a Aba 1 (Informação Básica) aplicando a formatação Panvel.
 
-    Monta o nome padronizado: [Filial] - Panvel [Nome] [Tag]_[Seq]
+    Campos: Nome (input), Localização (select), Tipo de elemento (select),
+    Tipo de unidade (select), Cidade (select), Endereço (input).
+    Filial e Estado foram removidos do formulário (não existem na tela real).
+    Descrição fica em branco.
     """
-    filial = _obter(row, COLUNA_FILIAL)
+    filial = _obter_filial(row)
     nome_player = _obter(row, COLUNA_NOME_PLAYER)
 
     if not filial:
-        raise RuntimeError("Coluna 'Filial' não encontrada ou vazia na planilha.")
+        raise RuntimeError("Coluna 'Filial' (ou 'ID') não encontrada ou vazia na planilha.")
     if not nome_player:
         raise RuntimeError("Coluna 'Nome do Player' não encontrada ou vazia na planilha.")
 
-    # Detecta tipo de mídia pelo nome (heurística simples)
-    nome_upper = nome_player.upper()
-    if "CHECKOUT" in nome_upper or "SELF" in nome_upper:
-        tag = TAG_SELF_CHECKOUT
+    # Se o nome da planilha já está no padrão Panvel (contém MED-TV_\d+ e "Panvel"),
+    # usa como está e NÃO chama _gerar_sequencial.
+    if re.search(r"MED-TV_\d+", nome_player) and "Panvel" in nome_player:
+        nome_final = nome_player
+        log(f"   Nome já formatado (Panvel), usado como está: {nome_final}")
     else:
-        tag = TAG_NUC_PADRAO
+        # Detecta tipo de mídia pelo nome (heurística simples)
+        nome_upper = nome_player.upper()
+        if "CHECKOUT" in nome_upper or "SELF" in nome_upper:
+            tag = TAG_SELF_CHECKOUT
+        else:
+            tag = TAG_NUC_PADRAO
 
-    sequencial = _gerar_sequencial(filial)
-    nome_padrao = _normalizar_nome_panvel(filial, nome_player, tag, sequencial)
-    log(f"   Nome Panvel gerado: {nome_padrao}")
+        sequencial = _gerar_sequencial(filial)
+        nome_final = _normalizar_nome_panvel(filial, nome_player, tag, sequencial)
+        log(f"   Nome Panvel gerado: {nome_final}")
 
-    # Preenche campos básicos
-    _preencher_campo_texto(pagina, "Nome", nome_padrao)
-    _preencher_campo_texto(pagina, "Filial", str(filial))
+    # Nome (input)
+    _preencher_input(pagina, "Nome", nome_final)
 
-    # Rua e Número
-    rua = _obter(row, COLUNA_RUA_NUMERO)
-    if rua:
-        _preencher_campo_texto(pagina, "Endereço", rua)
+    # Localização (select, valor padrão)
+    if LOCALIZACAO_PADRAO:
+        _selecionar_opcao(pagina, "Localização", LOCALIZACAO_PADRAO)
 
-    # Cidade e Estado
+    # Tipo de elemento (select)
+    _selecionar_opcao(pagina, "Tipo de elemento", TIPO_ELEMENTO_PADRAO)
+
+    # Tipo de unidade (select)
+    _selecionar_opcao(pagina, "Tipo de unidade", TIPO_UNIDADE_PADRAO)
+
+    # Cidade (select, valor da planilha)
     cidade = _obter(row, COLUNA_CIDADE)
     if cidade:
-        _preencher_campo_texto(pagina, "Cidade", cidade)
+        _selecionar_opcao(pagina, "Cidade", cidade)
 
-    estado = _obter(row, COLUNA_ESTADO)
-    if estado:
-        _preencher_campo_texto(pagina, "Estado", estado)
+    # Endereço (input, coluna "Rua e Número")
+    rua = _obter(row, COLUNA_RUA_NUMERO)
+    if rua:
+        _preencher_input(pagina, "Endereço", rua)
 
     log("   Aba 1 (Informação Básica) preenchida.")
 
@@ -241,6 +392,9 @@ def preencher_informacao_basica(pagina: Page, row, log=print) -> None:
 # ---------------------------------------------------------------------------
 # Aba 2 — Localização
 # ---------------------------------------------------------------------------
+
+# TODO: seletores não validados (ainda não tenho prints dessa tela)
+
 
 def preencher_localizacao(pagina: Page, row, log=print) -> None:
     """
@@ -254,8 +408,8 @@ def preencher_localizacao(pagina: Page, row, log=print) -> None:
         raise RuntimeError("Latitude e/ou Longitude não encontradas ou vazias na planilha.")
 
     # Preenche campos de coordenadas
-    _preencher_campo_texto(pagina, "Latitude", latitude)
-    _preencher_campo_texto(pagina, "Longitude", longitude)
+    _preencher_input(pagina, "Latitude", latitude)
+    _preencher_input(pagina, "Longitude", longitude)
 
     # Confirma ponto no mapa (seletores do Handoff)
     botao_confirmar = primeiro_visivel(
@@ -272,6 +426,7 @@ def preencher_localizacao(pagina: Page, row, log=print) -> None:
 
 # ---------------------------------------------------------------------------
 # Aba 3 — Faces
+# TODO: seletores não validados (ainda não tenho prints dessa tela)
 # ---------------------------------------------------------------------------
 
 def vincular_faces(pagina: Page, row, log=print) -> None:
@@ -311,6 +466,7 @@ def vincular_faces(pagina: Page, row, log=print) -> None:
 
 # ---------------------------------------------------------------------------
 # Aba 4 — Restrições
+# TODO: seletores não validados (ainda não tenho prints dessa tela)
 # ---------------------------------------------------------------------------
 
 def configurar_restricoes(pagina: Page, log=print) -> None:
@@ -381,33 +537,35 @@ def processar_criacao_unidade_panvel(pagina: Page, row, log=print) -> dict:
       {"success": bool, "skipped": bool, "changed": bool, "message": str}
     """
     try:
-        # Valida colunas obrigatórias
-        colunas_obrigatorias = [COLUNA_FILIAL, COLUNA_NOME_PLAYER, COLUNA_LATITUDE, COLUNA_LONGITUDE]
-        
-        # Debug: mostrar colunas disponíveis na linha
-        log(f"   [DEBUG] Colunas na linha: {list(row.index)}")
-        log(f"   [DEBUG] Buscando colunas: {colunas_obrigatorias}")
-        
-        faltando = [c for c in colunas_obrigatorias if not _obter(row, c)]
-        if faltando:
-            # Tenta encontrar coluna Filial com nomes alternativos
-            if COLUNA_FILIAL in faltando:
-                # Busca alternativas comuns para "Filial"
-                alternativas_filial = ["ID", "Filial ID", "Código", "Codigo", "Loja", "Numero", "Número"]
-                for alt in alternativas_filial:
-                    if _obter(row, alt):
-                        log(f"   [INFO] Coluna 'Filial' não encontrada, mas achou alternativa: '{alt}'")
-                        # Não adiciona à lista de faltando se achou alternativa
-                        faltando = [c for c in faltando if c != COLUNA_FILIAL]
-                        break
-            
-            if faltando:
-                return {
-                    "success": False,
-                    "skipped": False,
-                    "changed": False,
-                    "message": f"Coluna(s) obrigatória(s) ausente(s) ou vazia(s): {faltando}",
-                }
+        # Valida colunas obrigatórias (Filial aceita fallback para ID)
+        if not _obter_filial(row):
+            return {
+                "success": False,
+                "skipped": False,
+                "changed": False,
+                "message": "Coluna 'Filial' (ou 'ID') ausente ou vazia na planilha.",
+            }
+        if not _obter(row, COLUNA_NOME_PLAYER):
+            return {
+                "success": False,
+                "skipped": False,
+                "changed": False,
+                "message": "Coluna 'Nome do Player' ausente ou vazia na planilha.",
+            }
+        if not _obter(row, COLUNA_LATITUDE):
+            return {
+                "success": False,
+                "skipped": False,
+                "changed": False,
+                "message": "Coluna 'Latitude' ausente ou vazia na planilha.",
+            }
+        if not _obter(row, COLUNA_LONGITUDE):
+            return {
+                "success": False,
+                "skipped": False,
+                "changed": False,
+                "message": "Coluna 'Longitude' ausente ou vazia na planilha.",
+            }
 
         abrir_tela_criacao_unidade(pagina)
         log("   Tela de criação de unidade aberta.")
@@ -418,15 +576,15 @@ def processar_criacao_unidade_panvel(pagina: Page, row, log=print) -> dict:
         preencher_informacao_basica(pagina, row, log=log)
 
         # Navega para Aba 2 (Localização)
-        _clicar_aba(pagina, "Localização")
+        _clicar_proximo(pagina)
         preencher_localizacao(pagina, row, log=log)
 
         # Navega para Aba 3 (Faces)
-        _clicar_aba(pagina, "Faces")
+        _clicar_proximo(pagina)
         vincular_faces(pagina, row, log=log)
 
         # Navega para Aba 4 (Restrições)
-        _clicar_aba(pagina, "Restrições")
+        _clicar_proximo(pagina)
         configurar_restricoes(pagina, log=log)
 
         # Salvar
