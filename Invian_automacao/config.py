@@ -33,7 +33,6 @@ COLUNA_FILIAL       = "Filial"
 COLUNA_NOME_PLAYER  = "Nome do Player"
 COLUNA_RUA_NUMERO   = "Rua e Número"
 COLUNA_CIDADE       = "Cidade"
-COLUNA_ESTADO       = "Estado"
 COLUNA_LATITUDE     = "Latitude"
 COLUNA_LONGITUDE    = "Longitude"
 

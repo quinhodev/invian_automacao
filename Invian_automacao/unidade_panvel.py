@@ -4,14 +4,18 @@
 # Responsável por criar uma unidade do zero no painel web.invian.net seguindo
 # as regras de formatação sob medida do cliente Panvel Farmácias.
 #
-# Fluxo:
+# Fluxo (stepper com 5 etapas; todas ficam no DOM, inativas têm atributo inert):
 #   1. Abrir tela de criação de unidade
 #   2. Clicar em "Adicionar unidade"
-#   3. Aba 1 — Informação Básica (dados da planilha + formatação Panvel)
-#   4. Aba 2 — Localização (coordenadas com 6 casas decimais + confirma mapa)
-#   5. Aba 3 — Faces (vincular faces)
-#   6. Aba 4 — Restrições (checkbox)
-#   7. Salvar (botão btn-save)
+#   3. Etapa 1 — Informação Básica -> Próximo
+#   4. Etapa 2 — Localização ("lat, long") -> Próximo
+#   5. Etapa 3 — Câmeras (pular) -> Próximo
+#   6. Etapa 4 — Faces (adicionar 1) -> Próximo
+#   7. Etapa 5 — Restrições -> Terminar
+#
+# Todo helper de formulário procura DENTRO do painel ativo do stepper
+# (<div role="tabpanel" class="mat-horizontal-stepper-content-current">),
+# nunca na página toda.
 #
 # Padrão de nomenclatura Panvel:
 #   [Filial] - Panvel [Nome] [Tag]_[Seq]
@@ -20,6 +24,7 @@
 # =============================================================================
 
 import re
+import time
 import unicodedata
 from collections import defaultdict
 
@@ -49,13 +54,16 @@ from config import (
 )
 from navegador import aguardar_carregamento
 from texto import normalizar_espacos, texto_celula
-from web_utils import chave, primeiro_visivel
+from web_utils import chave
 
 # ---------------------------------------------------------------------------
 # Contador de sequencial por filial (escopo da execução atual)
 # ---------------------------------------------------------------------------
 _contador_por_filial: dict[str, int] = defaultdict(int)
 _total_por_filial: dict[str, int] = defaultdict(int)
+
+# Regex que detecta se o nome já está no padrão Panvel (contém "Panvel" e "MED-TV_N")
+_RE_NOME_PANVEL = re.compile(r"MED-TV_\d+")
 
 
 def _obter(row, coluna: str) -> str:
@@ -71,8 +79,8 @@ def _obter_filial(row) -> str:
 
 
 def preparar_sequenciais(df) -> None:
-    """
-    Conta quantas linhas (já filtradas) cada filial tem na planilha e zera o contador.
+    """Conta quantas linhas (já filtradas) cada filial tem na planilha e zera o contador.
+
     Deve ser chamada UMA vez no início da fase Panvel (o core.py faz isso).
     """
     _contador_por_filial.clear()
@@ -88,8 +96,7 @@ def preparar_sequenciais(df) -> None:
 
 
 def _gerar_sequencial(filial: str) -> str:
-    """
-    Devolve o sufixo sequencial para a filial.
+    """Devolve o sufixo sequencial para a filial.
 
     Regras Panvel:
       - filial com 1 unidade na planilha: '' (sem sufixo)
@@ -102,8 +109,7 @@ def _gerar_sequencial(filial: str) -> str:
 
 
 def _formatar_coordenada(valor) -> str:
-    """
-    Formata latitude/longitude com exatamente 6 casas decimais.
+    """Formata latitude/longitude com exatamente 6 casas decimais.
 
     Exemplo: -30.02751  ->  -30.027510
              -51.16842   ->  -51.168420
@@ -117,8 +123,7 @@ def _formatar_coordenada(valor) -> str:
 
 
 def _normalizar_nome_panvel(filial: str, nome: str, tag: str, sequencial: str) -> str:
-    """
-    Monta o nome padronizado Panvel: [Filial] - Panvel [Nome] [Tag]_[Seq]
+    """Monta o nome padronizado Panvel: [Filial] - Panvel [Nome] [Tag]_[Seq]
 
     Remove acentos e normaliza espaços nos componentes.
     """
@@ -141,9 +146,15 @@ def remover_acentos(texto: str) -> str:
     return "".join(c for c in texto if not unicodedata.combining(c))
 
 
+def _nome_ja_formatado(nome: str) -> bool:
+    """True se o nome já está no padrão Panvel (contém 'Panvel' e 'MED-TV_N')."""
+    return bool(nome and "Panvel" in nome and _RE_NOME_PANVEL.search(nome))
+
+
 # ---------------------------------------------------------------------------
 # Navegação
 # ---------------------------------------------------------------------------
+
 
 def abrir_tela_criacao_unidade(pagina: Page) -> None:
     """Navega até a tela de criação de unidade e aguarda o carregamento."""
@@ -152,8 +163,7 @@ def abrir_tela_criacao_unidade(pagina: Page) -> None:
 
 
 def clicar_adicionar_unidade(pagina: Page) -> None:
-    """
-    Clica no botão 'Adicionar' para abrir o formulário de criação de unidade.
+    """Clica no botão 'Adicionar' para abrir o formulário de criação de unidade.
 
     Espera o input de pesquisa da lista de unidades ficar visível (garante que a
     tela /settings/inventory/units carregou), depois clica no botão com role=button
@@ -176,6 +186,8 @@ def clicar_adicionar_unidade(pagina: Page) -> None:
 
     # Fallbacks
     if botao is None:
+        from web_utils import primeiro_visivel
+
         seletores = [
             'button:has(mat-icon[data-mat-icon-name="plus"])',
             'button.mat-mdc-unelevated-button:has-text("Adicionar")',
@@ -196,40 +208,47 @@ def clicar_adicionar_unidade(pagina: Page) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Aba 1 — Informação Básica
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# Helpers de formulário baseados em RÓTULO do mat-form-field
+# Helpers de escopo do stepper (painel ativo / modal)
 # ---------------------------------------------------------------------------
 
 
-def _campo(pagina: Page, rotulo: str):
+def _painel_atual(pagina: Page):
+    """Devolve o locator do painel ativo do stepper (etapa corrente)."""
+    painel = pagina.locator(".mat-horizontal-stepper-content-current").first
+    painel.wait_for(state="visible")
+    return painel
+
+
+def _campo(escopo, rotulo: str):
+    """Devolve o mat-form-field cujo label é exatamente `rotulo` (aceita '*' no final).
+
+    A busca é restrita a `escopo` (painel atual ou modal). O match é exato,
+    ignorando acento/caixa/espaços via web_utils.chave.
     """
-    Devolve o locator do mat-form-field cujo label é exatamente `rotulo`
-    (aceita '*' no final do label).
-    """
-    candidatos = pagina.locator("mat-form-field")
+    alvo = chave(rotulo)
+    alvo_com_asterisco = chave(rotulo + "*")
+    candidatos = escopo.locator("mat-form-field")
     total = candidatos.count()
     for i in range(total):
         ff = candidatos.nth(i)
         label_texto = ""
         for tag in ("mat-label", "label"):
             el = ff.locator(tag).first
-            if el.count() > 0:
-                try:
+            try:
+                if el.count() > 0:
                     label_texto = el.inner_text().strip()
-                    break
-                except Exception:
-                    continue
-        if label_texto == rotulo or label_texto == rotulo + "*":
+                    if label_texto:
+                        break
+            except Exception:
+                continue
+        if chave(label_texto) == alvo or chave(label_texto) == alvo_com_asterisco:
             return ff
-    raise RuntimeError(f'mat-form-field com label "{rotulo}" não encontrado.')
+    raise RuntimeError(f'mat-form-field com label "{rotulo}" não encontrado no escopo informado.')
 
 
-def _preencher_input(pagina: Page, rotulo: str, valor: str) -> None:
-    """Preenche o input/textarea do mat-form-field identificado pelo rótulo."""
-    campo = _campo(pagina, rotulo)
+def _preencher_input(escopo, rotulo: str, valor: str) -> None:
+    """Preenche o input/textarea do mat-form-field identificado pelo rótulo (dentro de escopo)."""
+    campo = _campo(escopo, rotulo)
     input_loc = campo.locator("input, textarea").first
     input_loc.wait_for(state="visible", timeout=TIMEOUT_ELEMENTO)
     input_loc.click()
@@ -237,307 +256,410 @@ def _preencher_input(pagina: Page, rotulo: str, valor: str) -> None:
     input_loc.fill(valor)
 
 
-def _selecionar_opcao(pagina: Page, rotulo: str, texto: str) -> None:
+
+def _selecionar_opcao(pagina: Page, escopo, rotulo: str, texto: str | None = None) -> str:
+    """Abre o mat-select do campo (dentro de escopo) e escolhe uma opção.
+
+    overlay = pagina.locator(".cdk-overlay-pane:visible").last
+    coleta overlay.locator("mat-option"); ignora opções que contenham
+    input/ngx-mat-select-search ou com aria-disabled="true".
+
+    Se texto for None -> clica na PRIMEIRA opção válida (espera até aparecer ≥1).
+    Se texto for informado -> match exato via chave() (parcial só se único);
+      clica por índice (opcoes.nth(i)), NUNCA por pagina.locator('mat-option:has-text(...)').
+    Em erro, pressiona Escape e levanta RuntimeError listando as opções vistas.
+    Espera o overlay fechar no final. Devolve o texto da opção clicada.
     """
-    Abre o mat-select do mat-form-field identificado pelo rótulo, filtra se houver
-    input de busca no overlay e escolhe a mat-option de texto IGUAL (usando web_utils.chave
-    para ignorar acento/caixa). Aceita parcial só se for única; senão RuntimeError
-    listando as opções vistas.
-    """
-    campo = _campo(pagina, rotulo)
+    campo = _campo(escopo, rotulo)
     mat_select = campo.locator("mat-select").first
     mat_select.wait_for(state="visible", timeout=TIMEOUT_ELEMENTO)
     mat_select.click()
 
-    # Aguarda o overlay do mat-select abrir
-    overlay = pagina.locator(".mat-mdc-select-panel, .mat-select-panel, .cdk-overlay-pane").first
+    # Aguarda o overlay do CDK abrir
+    overlay = pagina.locator(".cdk-overlay-pane:visible").last
     overlay.wait_for(state="visible", timeout=TIMEOUT_OVERLAY)
+    opcoes = overlay.locator("mat-option")
 
-    # Se há input de busca dentro do overlay, filtra
-    busca = overlay.locator("input")
-    if busca.count() > 0:
-        try:
-            busca.click()
-            busca.press("Control+A")
-            busca.fill(texto)
-            pagina.wait_for_timeout(500)
-        except Exception:
-            pass  # segue sem filtro se não houver input de busca
-
-    # Coleta opções visíveis
-    opcoes_vistas = []
-    opcoes = overlay.locator("mat-option").all()
-    for op in opcoes:
-        try:
-            if op.is_visible():
+    def _opcoes_validas():
+        validos = []
+        total = opcoes.count()
+        for i in range(total):
+            op = opcoes.nth(i)
+            try:
+                if not op.is_visible():
+                    continue
+            except Exception:
+                continue
+            # Ignora o campo de busca ("Pesquisar") quando está dentro de um mat-option
+            if op.locator("input, ngx-mat-select-search").count() > 0:
+                continue
+            try:
+                if op.get_attribute("aria-disabled") == "true":
+                    continue
+            except Exception:
+                pass
+            try:
                 t = op.inner_text().strip()
-                if t:
-                    opcoes_vistas.append(t)
+            except Exception:
+                continue
+            if t:
+                validos.append((i, t))
+        return validos
+
+    alvo = chave(texto) if texto is not None else None
+
+    # Espera até aparecer pelo menos uma opção válida
+    validos = []
+    inicio = time.time()
+    while time.time() - inicio < TIMEOUT_OVERLAY / 1000:
+        validos = _opcoes_validas()
+        if validos:
+            break
+        pagina.wait_for_timeout(200)
+
+    if not validos:
+        try:
+            pagina.keyboard.press("Escape")
         except Exception:
-            continue
+            pass
+        raise RuntimeError(
+            f'Nenhuma opção válida encontrada no select "{rotulo}" após abri-lo.'
+        )
 
-    alvo = chave(texto)
+    if texto is None:
+        i, txt = validos[0]
+    else:
+        # Match exato (ignorando acento/caixa)
+        exatas = [(i, t) for i, t in validos if chave(t) == alvo]
+        if len(exatas) == 1:
+            i, txt = exatas[0]
+        else:
+            # Match parcial só se único
+            parciais = [(i, t) for i, t in validos if alvo in chave(t)]
+            if len(parciais) == 1:
+                i, txt = parciais[0]
+            else:
+                vistas = [t for _, t in validos]
+                try:
+                    pagina.keyboard.press("Escape")
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f'Opção "{texto}" não encontrada no select "{rotulo}". '
+                    f"Opções vistas: {vistas}"
+                )
 
-    # Match exato (ignorando acento/caixa)
-    exatas = [o for o in opcoes_vistas if chave(o) == alvo]
-    if len(exatas) == 1:
-        pagina.locator(f'mat-option:has-text("{exatas[0]}")').first.click()
-        return
-
-    # Match parcial único
-    parciais = [o for o in opcoes_vistas if alvo in chave(o)]
-    if len(parciais) == 1:
-        pagina.locator(f'mat-option:has-text("{parciais[0]}")').first.click()
-        return
-
-    raise RuntimeError(
-        f'Opção "{texto}" não encontrada no select "{rotulo}". '
-        f"Opções vistas: {opcoes_vistas}"
-    )
+    opcoes.nth(i).click()
+    return txt
 
 
 def _clicar_proximo(pagina: Page) -> None:
-    """
-    Clica no botão 'Próximo', esperando até ~6 s ele habilitar.
-    Se não habilitar, levanta RuntimeError (campo obrigatório sem preencher).
-    """
-    import time
-
+    """Clica no botão 'Próximo' do painel ativo, esperando habilitar até ~6 s."""
+    painel = _painel_atual(pagina)
+    botao = painel.get_by_role("button", name=re.compile(r"^\s*Próximo\s*$"))
     inicio = time.time()
+    clicado = False
     while time.time() - inicio < 6:
-        botao = primeiro_visivel(
-            pagina,
-            ['button:has-text("Próximo")', 'button:has-text("Proximo")'],
-            timeout=1000,
+        try:
+            if botao.count() > 0 and botao.first.is_visible() and botao.first.is_enabled():
+                botao.first.click()
+                clicado = True
+                break
+        except Exception:
+            pass
+        pagina.wait_for_timeout(200)
+    if not clicado:
+        raise RuntimeError(
+            "Botão 'Próximo' não habilitou dentro do tempo esperado (~6 s). "
+            "Verifique se todos os campos obrigatórios da etapa foram preenchidos."
         )
-        if botao is not None:
-            try:
-                if botao.is_enabled():
-                    botao.click()
-                    pagina.wait_for_timeout(800)
-                    return
-            except Exception:
-                pass
-        pagina.wait_for_timeout(500)
-    raise RuntimeError(
-        "O botão 'Próximo' não habilitou — algum campo obrigatório ficou sem preencher."
-    )
+    # Aguarda o painel anterior perder a classe "current" (ou ~800 ms) antes de seguir.
+    try:
+        pagina.wait_for_function(
+            "(el) => !el.classList.contains('mat-horizontal-stepper-content-current')",
+            arg=painel.element_handle(),
+            timeout=800,
+        )
+    except Exception:
+        pagina.wait_for_timeout(800)
+
+
+def _clicar_terminar(pagina: Page) -> None:
+    """Clica no botão 'Terminar' do painel ativo (última etapa: Restrições)."""
+    painel = _painel_atual(pagina)
+    botao = painel.get_by_role("button", name=re.compile(r"^\s*Terminar\s*$"))
+    inicio = time.time()
+    clicado = False
+    while time.time() - inicio < 6:
+        try:
+            if botao.count() > 0 and botao.first.is_visible() and botao.first.is_enabled():
+                botao.first.click()
+                clicado = True
+                break
+        except Exception:
+            pass
+        pagina.wait_for_timeout(200)
+    if not clicado:
+        raise RuntimeError(
+            "Botão 'Terminar' não habilitou dentro do tempo esperado (~6 s)."
+        )
+    try:
+        pagina.wait_for_function(
+            "(el) => !el.classList.contains('mat-horizontal-stepper-content-current')",
+            arg=painel.element_handle(),
+            timeout=800,
+        )
+    except Exception:
+        pagina.wait_for_timeout(800)
+
 
 
 # ---------------------------------------------------------------------------
-# Aba 1 — Informação Básica
+# Etapa 1 — Informação Básica
 # ---------------------------------------------------------------------------
 
 
 def preencher_informacao_basica(pagina: Page, row, log=print) -> None:
-    """
-    Preenche a Aba 1 (Informação Básica) aplicando a formatação Panvel.
+    """Preenche a Etapa 1 (Informação Básica) dentro do painel ativo do stepper."""
+    escopo = _painel_atual(pagina)
 
-    Campos: Nome (input), Localização (select), Tipo de elemento (select),
-    Tipo de unidade (select), Cidade (select), Endereço (input).
-    Filial e Estado foram removidos do formulário (não existem na tela real).
-    Descrição fica em branco.
-    """
-    filial = _obter_filial(row)
     nome_player = _obter(row, COLUNA_NOME_PLAYER)
+    filial = _obter_filial(row)
 
-    if not filial:
-        raise RuntimeError("Coluna 'Filial' (ou 'ID') não encontrada ou vazia na planilha.")
-    if not nome_player:
-        raise RuntimeError("Coluna 'Nome do Player' não encontrada ou vazia na planilha.")
-
-    # Se o nome da planilha já está no padrão Panvel (contém MED-TV_\d+ e "Panvel"),
-    # usa como está e NÃO chama _gerar_sequencial.
-    if re.search(r"MED-TV_\d+", nome_player) and "Panvel" in nome_player:
+    # Nome: se já estiver no padrão Panvel, usa como está; senão monta.
+    if _nome_ja_formatado(nome_player):
         nome_final = nome_player
         log(f"   Nome já formatado (Panvel), usado como está: {nome_final}")
     else:
-        # Detecta tipo de mídia pelo nome (heurística simples)
-        nome_upper = nome_player.upper()
-        if "CHECKOUT" in nome_upper or "SELF" in nome_upper:
-            tag = TAG_SELF_CHECKOUT
-        else:
-            tag = TAG_NUC_PADRAO
-
+        # Exige Filial/ID apenas quando é preciso montar o nome.
+        if not filial:
+            raise RuntimeError(
+                "Coluna 'Filial' (ou 'ID') não encontrada/vazia na planilha; "
+                "é necessária para montar o nome da unidade."
+            )
+        tag = (
+            TAG_SELF_CHECKOUT
+            if ("CHECKOUT" in nome_player.upper() or "SELF" in nome_player.upper())
+            else TAG_NUC_PADRAO
+        )
         sequencial = _gerar_sequencial(filial)
         nome_final = _normalizar_nome_panvel(filial, nome_player, tag, sequencial)
         log(f"   Nome Panvel gerado: {nome_final}")
 
     # Nome (input)
-    _preencher_input(pagina, "Nome", nome_final)
+    _preencher_input(escopo, "Nome", nome_final)
 
-    # Localização (select, valor padrão)
-    if LOCALIZACAO_PADRAO:
-        _selecionar_opcao(pagina, "Localização", LOCALIZACAO_PADRAO)
+    # Localização (select): LOCALIZACAO_PADRAO é obrigatória
+    if not LOCALIZACAO_PADRAO:
+        raise RuntimeError("LOCALIZACAO_PADRAO não definido em config.py.")
+    _selecionar_opcao(pagina, escopo, "Localização", LOCALIZACAO_PADRAO)
 
     # Tipo de elemento (select)
-    _selecionar_opcao(pagina, "Tipo de elemento", TIPO_ELEMENTO_PADRAO)
+    _selecionar_opcao(pagina, escopo, "Tipo de elemento", TIPO_ELEMENTO_PADRAO)
 
     # Tipo de unidade (select)
-    _selecionar_opcao(pagina, "Tipo de unidade", TIPO_UNIDADE_PADRAO)
+    _selecionar_opcao(pagina, escopo, "Tipo de unidade", TIPO_UNIDADE_PADRAO)
 
-    # Cidade (select, valor da planilha)
+    # Cidade (select, valor da planilha) — obrigatório
     cidade = _obter(row, COLUNA_CIDADE)
-    if cidade:
-        _selecionar_opcao(pagina, "Cidade", cidade)
+    if not cidade:
+        raise RuntimeError(
+            f"Coluna '{COLUNA_CIDADE}' não encontrada ou vazia na planilha "
+            "(obrigatória na Etapa 1)."
+        )
+    _selecionar_opcao(pagina, escopo, "Cidade", cidade)
 
-    # Endereço (input, coluna "Rua e Número")
+    # Endereço (input, coluna "Rua e Número") — obrigatório
     rua = _obter(row, COLUNA_RUA_NUMERO)
-    if rua:
-        _preencher_input(pagina, "Endereço", rua)
+    if not rua:
+        raise RuntimeError(
+            f"Coluna '{COLUNA_RUA_NUMERO}' não encontrada ou vazia na planilha "
+            "(obrigatória na Etapa 1)."
+        )
+    _preencher_input(escopo, "Endereço", rua)
 
-    log("   Aba 1 (Informação Básica) preenchida.")
+    log("   Etapa 1 (Informação Básica) preenchida.")
 
 
 # ---------------------------------------------------------------------------
-# Aba 2 — Localização
+# Etapa 2 — Localização
 # ---------------------------------------------------------------------------
-
-# TODO: seletores não validados (ainda não tenho prints dessa tela)
 
 
 def preencher_localizacao(pagina: Page, row, log=print) -> None:
-    """
-    Preenche a Aba 2 (Localização) com Latitude e Longitude (6 casas decimais)
-    e confirma o ponto no mapa.
-    """
-    latitude = _formatar_coordenada(_obter(row, COLUNA_LATITUDE))
-    longitude = _formatar_coordenada(_obter(row, COLUNA_LONGITUDE))
+    """Preenche a Etapa 2 (Localização) com 'lat, long' (6 casas, separador ', ')."""
+    lat = _formatar_coordenada(_obter(row, COLUNA_LATITUDE))
+    lon = _formatar_coordenada(_obter(row, COLUNA_LONGITUDE))
 
-    if not latitude or not longitude:
+    if not lat or not lon:
         raise RuntimeError("Latitude e/ou Longitude não encontradas ou vazias na planilha.")
 
-    # Preenche campos de coordenadas
-    _preencher_input(pagina, "Latitude", latitude)
-    _preencher_input(pagina, "Longitude", longitude)
+    texto = f"{lat}, {lon}"
+    _preencher_input(_painel_atual(pagina), "Localização", texto)
+    # Tira o foco do campo para disparar a atualização do mapa; NÃO aperta Enter.
+    pagina.keyboard.press("Tab")
+    pagina.wait_for_timeout(1500)
 
-    # Confirma ponto no mapa (seletores do Handoff)
-    botao_confirmar = primeiro_visivel(
-        pagina,
-        ["button.btn-confirmlocation", ".map-container button.btn-confirmlocation", 'button:has-text("Confirmar Ponto")'],
-        timeout=TIMEOUT_ELEMENTO,
-    )
-    if botao_confirmar is not None:
-        botao_confirmar.click()
-        pagina.wait_for_timeout(1000)
-
-    log(f"   Aba 2 (Localização) preenchida: {latitude}, {longitude}")
+    log(f"   Etapa 2 (Localização) preenchida: {texto}")
 
 
 # ---------------------------------------------------------------------------
-# Aba 3 — Faces
-# TODO: seletores não validados (ainda não tenho prints dessa tela)
+# Etapa 3 — Câmeras (pular)
 # ---------------------------------------------------------------------------
+
+
+def pular_cameras(pagina: Page, log=print) -> None:
+    """Pula a Etapa 3 (Câmeras): apenas avança para a próxima etapa."""
+    log("   Etapa Câmeras ignorada")
+    _clicar_proximo(pagina)
+
+
+
+# ---------------------------------------------------------------------------
+# Etapa 4 — Faces
+# ---------------------------------------------------------------------------
+
 
 def vincular_faces(pagina: Page, row, log=print) -> None:
-    """
-    Preenche a Aba 3 (Faces): adiciona/vincula faces e define a tag da face.
+    """Vincula uma face na Etapa 4 (Faces) e avança para a próxima etapa.
 
-    Prepara o terreno para a automação de preços (faces.py) que já existe.
+    Fluxo no painel atual:
+      1. Clica no botão "Adicionar" (abre o modal "Adicionar Face").
+      2. No modal: "Tipo de face" -> primeira opção; "Dimensões" -> primeira opção válida.
+      3. Clica em "Salvar" dentro do modal.
+      4. Confirma o fechamento do modal e avança (Próximo).
     """
-    nome_player = _obter(row, COLUNA_NOME_PLAYER)
+    escopo = _painel_atual(pagina)
 
-    # Clica em "Adicionar Face"
-    botao_add_face = primeiro_visivel(
-        pagina,
-        ['button.btn-add-face', 'button:has-text("Adicionar Face")', 'button:has-text("+ Face")'],
-        timeout=TIMEOUT_ELEMENTO,
+    # 1. Clica em "Adicionar" dentro do painel atual
+    botao_adicionar = escopo.get_by_role("button", name=re.compile(r"^\s*Adicionar\s*$"))
+    botao_adicionar.wait_for(state="visible", timeout=TIMEOUT_ELEMENTO)
+    botao_adicionar.click()
+    log("   Botão 'Adicionar' clicado (modal Adicionar Face).")
+
+    # 2. Modal "Adicionar Face"
+    dialog = (
+        pagina.locator("mat-dialog-container, .mat-mdc-dialog-container, [role='dialog']")
+        .filter(has_text="Adicionar Face")
+        .last
     )
-    if botao_add_face is None:
-        raise RuntimeError("Botão 'Adicionar Face' não encontrado na Aba 3.")
-    botao_add_face.click()
-    pagina.wait_for_timeout(1000)
+    dialog.wait_for(state="visible", timeout=TIMEOUT_ELEMENTO)
 
-    # Preenche a tag da face (usa o nome do player como referência)
-    if nome_player:
-        campo_tag = primeiro_visivel(
-            pagina,
-            ['input[name="faceTag"]', ".select-facetag", 'input[placeholder*="Face" i]'],
-            timeout=TIMEOUT_ELEMENTO,
+    # Tipo de face -> primeira opção
+    tipo_face = _selecionar_opcao(pagina, dialog, "Tipo de face", texto=None)
+    log(f"   Tipo de face escolhido: {tipo_face}")
+
+    # Dimensões -> primeira opção válida (pode demorar a carregar após escolher o tipo de face)
+    dimensao = _selecionar_opcao(pagina, dialog, "Dimensões", texto=None)
+    log(f"   Dimensão escolhida: {dimensao}")
+
+    # 3. Clica em "Salvar" dentro do modal (um único clique)
+    botao_salvar = dialog.get_by_role("button", name=re.compile(r"^\s*Salvar\s*$"))
+    botao_salvar.wait_for(state="visible", timeout=TIMEOUT_ELEMENTO)
+    botao_salvar.click()
+
+    # 4. Confirma o fechamento do modal (até 15 s)
+    try:
+        dialog.wait_for(state="hidden", timeout=15_000)
+    except PlaywrightTimeoutError:
+        raise RuntimeError("Modal de face não fechou após Salvar.")
+
+    # Se possível, confirma o texto "1 faces" no painel
+    try:
+        escopo.get_by_text(re.compile(r"\b1\s*faces?\b")).first.wait_for(
+            state="visible", timeout=3000
         )
-        if campo_tag is not None:
-            campo_tag.click()
-            campo_tag.press("Control+A")
-            campo_tag.fill(nome_player)
-            pagina.wait_for_timeout(500)
+    except Exception:
+        pass  # não crítico; o fechamento do modal já confirma
 
-    log("   Aba 3 (Faces) preenchida.")
+    # Avança para a próxima etapa
+    _clicar_proximo(pagina)
 
 
 # ---------------------------------------------------------------------------
-# Aba 4 — Restrições
-# TODO: seletores não validados (ainda não tenho prints dessa tela)
+# Etapa 5 — Restrições / Finalizar
 # ---------------------------------------------------------------------------
+
 
 def configurar_restricoes(pagina: Page, log=print) -> None:
+    """Etapa 5 (Restrições): não há nada a preencher; apenas registra."""
+    log("   Restrições: nada a configurar.")
+
+
+
+def finalizar_unidade(pagina: Page, log=print) -> bool:
+    """Clica em 'Terminar' (Etapa 5) e confirma o sucesso da criação.
+
+    Confirmação (até 20 s): toast com /(Sucesso|Salvo|Criado|Success|Created)/i
+    visível, OU o título "Adicionar unidade" sair da tela / a URL mudar.
+    Retorna True somente se algo for confirmado; senão False + aviso com o
+    texto visível da tela (primeiros 300 chars do body) para diagnóstico.
     """
-    Preenche a Aba 4 (Restrições): marca checkbox de restrições se aplicável.
-    """
-    checkbox = primeiro_visivel(
-        pagina,
-        ['input[type="checkbox"].restrictionitem', 'input[type="checkbox"][name*="restriction" i]'],
-        timeout=TIMEOUT_ELEMENTO,
-    )
-    if checkbox is not None:
+    _clicar_terminar(pagina)
+
+    url_antes = pagina.url
+
+    # Aguarda confirmação de sucesso (até 20 s)
+    inicio = time.time()
+    while time.time() - inicio < 20:
+        # Toast de sucesso
         try:
-            if not checkbox.is_checked():
-                checkbox.click()
+            toast = pagina.get_by_text(
+                re.compile(r"(Sucesso|Salvo|Criado|Success|Created)", re.IGNORECASE)
+            ).first
+            if toast.is_visible():
+                log("   Unidade criada com sucesso (toast detectado).")
+                return True
         except Exception:
             pass
-    log("   Aba 4 (Restrições) configurada.")
 
+        # O título "Adicionar unidade" saiu da tela
+        try:
+            titulo = pagina.get_by_text("Adicionar unidade").first
+            if titulo.count() > 0 and not titulo.is_visible():
+                log("   Unidade criada com sucesso (tela 'Adicionar unidade' fechou).")
+                return True
+        except Exception:
+            pass
 
-# ---------------------------------------------------------------------------
-# Salvar
-# ---------------------------------------------------------------------------
+        # A URL mudou
+        if pagina.url != url_antes:
+            log("   Unidade criada com sucesso (URL alterada após Terminar).")
+            return True
 
-def salvar_unidade(pagina: Page, log=print) -> bool:
-    """
-    Clica no botão Salvar/Finalizar e aguarda confirmação de sucesso.
+        pagina.wait_for_timeout(500)
 
-    Retorna True se salvou com sucesso, False caso contrário.
-    """
-    seletores_salvar = [
-        'button[type="submit"].btn-save',
-        'button.btn-save',
-        'button:has-text("Salvar")',
-        'button:has-text("Finalizar")',
-        'button:has-text("Save")',
-    ]
-    botao = primeiro_visivel(pagina, seletores_salvar, timeout=TIMEOUT_ELEMENTO)
-    if botao is None:
-        raise RuntimeError("Botão 'Salvar/Finalizar' não encontrado.")
-
-    botao.scroll_into_view_if_needed()
-    botao.click()
-
-    # Aguarda confirmação de sucesso (toast/mensagem)
+    # Nenhuma confirmação: aviso com o texto visível da tela para diagnóstico
     try:
-        pagina.get_by_text(
-            re.compile(r"(Sucesso|Salvo|Atualizado|Success|Saved|Created|Criado)", re.IGNORECASE)
-        ).first.wait_for(state="visible", timeout=15_000)
-        log("   Unidade salva com sucesso.")
-        return True
-    except PlaywrightTimeoutError:
-        # Pode ter fechado o modal direto = salvou
-        pagina.wait_for_timeout(2000)
-        log("   Unidade salva (confirmação visual não detectada, mas sem erro).")
-        return True
+        corpo = pagina.locator("body").inner_text()[:300]
+    except Exception:
+        corpo = "(não foi possível ler o corpo da tela)"
+    log(
+        "   [AVISO] Nenhuma confirmação de criação detectada após 'Terminar'. "
+        f"Texto visível da tela (300 chars): {corpo}"
+    )
+    return False
 
 
 # ---------------------------------------------------------------------------
 # Orquestração completa
 # ---------------------------------------------------------------------------
 
+
 def processar_criacao_unidade_panvel(pagina: Page, row, log=print) -> dict:
-    """
-    Executa todo o fluxo de criação de unidade Panvel (Aba 1 → Aba 4 → Salvar).
+    """Executa todo o fluxo de criação de unidade Panvel (5 etapas do stepper).
+
+    Fluxo:
+      abrir_tela -> clicar_adicionar_unidade -> preencher_informacao_basica ->
+      _clicar_proximo -> preencher_localizacao -> _clicar_proximo ->
+      pular_cameras (já clica Próximo) -> vincular_faces (já clica Próximo) ->
+      configurar_restricoes -> finalizar_unidade
 
     Retorna dict padronizado:
       {"success": bool, "skipped": bool, "changed": bool, "message": str}
     """
     try:
-        # Valida colunas obrigatórias (Filial aceita fallback para ID)
+        # Validação inicial: Filial/ID, Nome do Player, Latitude e Longitude são obrigatórias.
         if not _obter_filial(row):
             return {
                 "success": False,
@@ -571,30 +693,26 @@ def processar_criacao_unidade_panvel(pagina: Page, row, log=print) -> dict:
         log("   Tela de criação de unidade aberta.")
 
         clicar_adicionar_unidade(pagina)
-        log("   Botão 'Adicionar unidade' clicado.")
+        log("   Botão 'Adicionar' clicado.")
 
         preencher_informacao_basica(pagina, row, log=log)
-
-        # Navega para Aba 2 (Localização)
         _clicar_proximo(pagina)
+
         preencher_localizacao(pagina, row, log=log)
-
-        # Navega para Aba 3 (Faces)
         _clicar_proximo(pagina)
-        vincular_faces(pagina, row, log=log)
 
-        # Navega para Aba 4 (Restrições)
-        _clicar_proximo(pagina)
+        pular_cameras(pagina, log=log)  # já clica em Próximo
+
+        vincular_faces(pagina, row, log=log)  # já clica em Próximo ao final
+
         configurar_restricoes(pagina, log=log)
-
-        # Salvar
-        salvou = salvar_unidade(pagina, log=log)
+        salvou = finalizar_unidade(pagina, log=log)
 
         return {
             "success": salvou,
             "skipped": False,
             "changed": salvou,
-            "message": "unidade criada com sucesso" if salvou else "falha ao salvar",
+            "message": "unidade criada com sucesso" if salvou else "falha ao finalizar",
         }
 
     except Exception as e:
@@ -605,24 +723,3 @@ def processar_criacao_unidade_panvel(pagina: Page, row, log=print) -> dict:
             "message": f"Erro: {e}",
         }
 
-
-def _clicar_aba(pagina: Page, nome_aba: str) -> None:
-    """
-    Clica na aba (tab) informada para ativá-la antes de preencher.
-
-    Tenta localizar por texto da aba (mat-tab, role=tab, etc.).
-    """
-    seletores = [
-        f'mat-tab:has-text("{nome_aba}")',
-        f'[role="tab"]:has-text("{nome_aba}")',
-        f'button:has-text("{nome_aba}")',
-        f'a:has-text("{nome_aba}")',
-        f'div:has-text("{nome_aba}")',
-    ]
-    aba = primeiro_visivel(pagina, seletores, timeout=TIMEOUT_ELEMENTO)
-    if aba is not None:
-        try:
-            aba.click()
-            pagina.wait_for_timeout(800)
-        except Exception:
-            pass
