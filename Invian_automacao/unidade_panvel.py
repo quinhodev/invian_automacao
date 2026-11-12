@@ -27,6 +27,7 @@ import re
 import time
 import unicodedata
 from collections import defaultdict
+from pathlib import Path
 
 from playwright.sync_api import (
     Page,
@@ -54,7 +55,7 @@ from config import (
 )
 from navegador import aguardar_carregamento
 from texto import normalizar_espacos, texto_celula
-from web_utils import chave
+from web_utils import chave, escolher_linha, SELETOR_CELULA
 
 # ---------------------------------------------------------------------------
 # Contador de sequencial por filial (escopo da execução atual)
@@ -93,6 +94,34 @@ def preparar_sequenciais(df) -> None:
         filial = texto_celula(valor)
         if filial:
             _total_por_filial[filial] += 1
+
+
+def _nome_final(row, log=print) -> str:
+    """Calcula o nome final da unidade, uma única vez por linha.
+
+    Se o Nome do Player já estiver no padrão Panvel, usa como está.
+    Senão monta com _normalizar_nome_panvel + _gerar_sequencial (que só pode
+    rodar UMA vez por linha, incrementando o contador da filial).
+    """
+    nome_player = _obter(row, COLUNA_NOME_PLAYER)
+    if _nome_ja_formatado(nome_player):
+        log(f"   Nome já formatado (Panvel), usado como está: {nome_player}")
+        return nome_player
+    filial = _obter_filial(row)
+    if not filial:
+        raise RuntimeError(
+            "Coluna 'Filial' (ou 'ID') não encontrada/vazia na planilha; "
+            "é necessária para montar o nome da unidade."
+        )
+    tag = (
+        TAG_SELF_CHECKOUT
+        if ("CHECKOUT" in nome_player.upper() or "SELF" in nome_player.upper())
+        else TAG_NUC_PADRAO
+    )
+    sequencial = _gerar_sequencial(filial)
+    nome = _normalizar_nome_panvel(filial, nome_player, tag, sequencial)
+    log(f"   Nome Panvel gerado: {nome}")
+    return nome
 
 
 def _gerar_sequencial(filial: str) -> str:
@@ -229,6 +258,7 @@ def _campo(escopo, rotulo: str):
     alvo_com_asterisco = chave(rotulo + "*")
     candidatos = escopo.locator("mat-form-field")
     total = candidatos.count()
+    rotulos_vistos = []
     for i in range(total):
         ff = candidatos.nth(i)
         label_texto = ""
@@ -241,9 +271,13 @@ def _campo(escopo, rotulo: str):
                         break
             except Exception:
                 continue
+        rotulos_vistos.append(label_texto)
         if chave(label_texto) == alvo or chave(label_texto) == alvo_com_asterisco:
             return ff
-    raise RuntimeError(f'mat-form-field com label "{rotulo}" não encontrado no escopo informado.')
+    raise RuntimeError(
+        f'mat-form-field com label "{rotulo}" não encontrado no escopo informado. '
+        f"Rótulos vistos: {rotulos_vistos}"
+    )
 
 
 def _preencher_input(escopo, rotulo: str, valor: str) -> None:
@@ -265,10 +299,14 @@ def _selecionar_opcao(pagina: Page, escopo, rotulo: str, texto: str | None = Non
     input/ngx-mat-select-search ou com aria-disabled="true".
 
     Se texto for None -> clica na PRIMEIRA opção válida (espera até aparecer ≥1).
-    Se texto for informado -> match exato via chave() (parcial só se único);
+    Se texto for informado e o overlay tiver campo de busca (input:visible),
+    digita o texto e espera ~600 ms ANTES de coletar as opções.
+    Match exato via chave() (parcial só se único);
       clica por índice (opcoes.nth(i)), NUNCA por pagina.locator('mat-option:has-text(...)').
     Em erro, pressiona Escape e levanta RuntimeError listando as opções vistas.
-    Espera o overlay fechar no final. Devolve o texto da opção clicada.
+    Depois de opcoes.nth(i).click(), espera a primeira mat-option sumir (overlay fechou).
+    NÃO espera .cdk-overlay-pane sumir (o modal da face também é um pane).
+    Devolve o texto da opção clicada.
     """
     campo = _campo(escopo, rotulo)
     mat_select = campo.locator("mat-select").first
@@ -278,6 +316,20 @@ def _selecionar_opcao(pagina: Page, escopo, rotulo: str, texto: str | None = Non
     # Aguarda o overlay do CDK abrir
     overlay = pagina.locator(".cdk-overlay-pane:visible").last
     overlay.wait_for(state="visible", timeout=TIMEOUT_OVERLAY)
+
+    # Se houver campo de busca no overlay e texto informado, digita e aguarda
+    # ~600 ms para o filtro das opções ser aplicado antes de coletar.
+    if texto is not None:
+        busca = overlay.locator("input:visible").first
+        try:
+            if busca.count() > 0 and busca.is_visible():
+                busca.click()
+                busca.press("Control+A")
+                busca.fill(texto)
+                pagina.wait_for_timeout(600)
+        except Exception:
+            pass
+
     opcoes = overlay.locator("mat-option")
 
     def _opcoes_validas():
@@ -350,12 +402,21 @@ def _selecionar_opcao(pagina: Page, escopo, rotulo: str, texto: str | None = Non
                 )
 
     opcoes.nth(i).click()
+    # Após clicar na opção, espera a primeira mat-option sumir (overlay fechou).
+    # NÃO esperar .cdk-overlay-pane sumir: o modal da face também é um pane.
+    try:
+        pagina.locator("mat-option").first.wait_for(state="hidden", timeout=TIMEOUT_OVERLAY)
+    except Exception:
+        pagina.wait_for_timeout(800)
     return txt
 
 
 def _clicar_proximo(pagina: Page) -> None:
     """Clica no botão 'Próximo' do painel ativo, esperando habilitar até ~6 s."""
     painel = _painel_atual(pagina)
+    # Captura o handle ANTES do clique: o wait_for_function deve comparar com
+    # o painel que existia antes, não com o novo painel renderizado depois.
+    painel_handle = painel.element_handle()
     botao = painel.get_by_role("button", name=re.compile(r"^\s*Próximo\s*$"))
     inicio = time.time()
     clicado = False
@@ -377,7 +438,7 @@ def _clicar_proximo(pagina: Page) -> None:
     try:
         pagina.wait_for_function(
             "(el) => !el.classList.contains('mat-horizontal-stepper-content-current')",
-            arg=painel.element_handle(),
+            arg=painel_handle,
             timeout=800,
         )
     except Exception:
@@ -387,6 +448,9 @@ def _clicar_proximo(pagina: Page) -> None:
 def _clicar_terminar(pagina: Page) -> None:
     """Clica no botão 'Terminar' do painel ativo (última etapa: Restrições)."""
     painel = _painel_atual(pagina)
+    # Captura o handle ANTES do clique: o wait_for_function deve comparar com
+    # o painel que existia antes, não com o novo painel renderizado depois.
+    painel_handle = painel.element_handle()
     botao = painel.get_by_role("button", name=re.compile(r"^\s*Terminar\s*$"))
     inicio = time.time()
     clicado = False
@@ -406,7 +470,7 @@ def _clicar_terminar(pagina: Page) -> None:
     try:
         pagina.wait_for_function(
             "(el) => !el.classList.contains('mat-horizontal-stepper-content-current')",
-            arg=painel.element_handle(),
+            arg=painel_handle,
             timeout=800,
         )
     except Exception:
@@ -419,40 +483,49 @@ def _clicar_terminar(pagina: Page) -> None:
 # ---------------------------------------------------------------------------
 
 
-def preencher_informacao_basica(pagina: Page, row, log=print) -> None:
-    """Preenche a Etapa 1 (Informação Básica) dentro do painel ativo do stepper."""
+def preencher_informacao_basica(pagina: Page, row, log=print, nome_final=None) -> None:
+    """Preenche a Etapa 1 (Informação Básica) dentro do painel ativo do stepper.
+
+    Se `nome_final` for fornecido (calculado uma vez pelo chamador), é usado
+    diretamente; senão, é calculado aqui (compatibilidade com chamadas diretas).
+    """
     escopo = _painel_atual(pagina)
 
     nome_player = _obter(row, COLUNA_NOME_PLAYER)
-    filial = _obter_filial(row)
 
-    # Nome: se já estiver no padrão Panvel, usa como está; senão monta.
-    if _nome_ja_formatado(nome_player):
-        nome_final = nome_player
-        log(f"   Nome já formatado (Panvel), usado como está: {nome_final}")
-    else:
-        # Exige Filial/ID apenas quando é preciso montar o nome.
-        if not filial:
-            raise RuntimeError(
-                "Coluna 'Filial' (ou 'ID') não encontrada/vazia na planilha; "
-                "é necessária para montar o nome da unidade."
+    # Nome: usa o fornecido ou calcula uma vez (já formatado Panvel ou monta).
+    if nome_final is None:
+        if _nome_ja_formatado(nome_player):
+            nome_final = nome_player
+            log(f"   Nome já formatado (Panvel), usado como está: {nome_final}")
+        else:
+            # Exige Filial/ID apenas quando é preciso montar o nome.
+            filial = _obter_filial(row)
+            if not filial:
+                raise RuntimeError(
+                    "Coluna 'Filial' (ou 'ID') não encontrada/vazia na planilha; "
+                    "é necessária para montar o nome da unidade."
+                )
+            tag = (
+                TAG_SELF_CHECKOUT
+                if ("CHECKOUT" in nome_player.upper() or "SELF" in nome_player.upper())
+                else TAG_NUC_PADRAO
             )
-        tag = (
-            TAG_SELF_CHECKOUT
-            if ("CHECKOUT" in nome_player.upper() or "SELF" in nome_player.upper())
-            else TAG_NUC_PADRAO
-        )
-        sequencial = _gerar_sequencial(filial)
-        nome_final = _normalizar_nome_panvel(filial, nome_player, tag, sequencial)
-        log(f"   Nome Panvel gerado: {nome_final}")
+            sequencial = _gerar_sequencial(filial)
+            nome_final = _normalizar_nome_panvel(filial, nome_player, tag, sequencial)
+            log(f"   Nome Panvel gerado: {nome_final}")
+    else:
+        log(f"   Nome da unidade: {nome_final}")
 
     # Nome (input)
     _preencher_input(escopo, "Nome", nome_final)
 
-    # Localização (select): LOCALIZACAO_PADRAO é obrigatória
-    if not LOCALIZACAO_PADRAO:
-        raise RuntimeError("LOCALIZACAO_PADRAO não definido em config.py.")
-    _selecionar_opcao(pagina, escopo, "Localização", LOCALIZACAO_PADRAO)
+    # Localização (select): se LOCALIZACAO_PADRAO vazio, usa a 1ª opção válida.
+    if LOCALIZACAO_PADRAO:
+        _selecionar_opcao(pagina, escopo, "Localização", LOCALIZACAO_PADRAO)
+    else:
+        escolhida = _selecionar_opcao(pagina, escopo, "Localização", texto=None)
+        log(f"   [AVISO] LOCALIZACAO_PADRAO vazio: usada a 1ª opção: {escolhida}")
 
     # Tipo de elemento (select)
     _selecionar_opcao(pagina, escopo, "Tipo de elemento", TIPO_ELEMENTO_PADRAO)
@@ -587,21 +660,61 @@ def configurar_restricoes(pagina: Page, log=print) -> None:
 
 
 
-def finalizar_unidade(pagina: Page, log=print) -> bool:
+def _diagnostico(pagina: Page) -> str:
+    """Devolve a etapa atual do stepper e os primeiros 300 caracteres de texto
+    visível do painel atual/modal, para anexar ao "message" de exceção."""
+    partes = []
+    try:
+        passo = pagina.locator(".mat-horizontal-stepper-content-current").first
+        if passo.count() > 0:
+            texto_passo = passo.inner_text()[:200].replace("\n", " | ")
+            partes.append(f"etapa_atual={texto_passo}")
+    except Exception:
+        pass
+    try:
+        escopo = pagina.locator(".mat-horizontal-stepper-content-current").first
+        if escopo.count() > 0:
+            corpo = escopo.inner_text()[:300]
+        else:
+            corpo = pagina.locator("body").inner_text()[:300]
+    except Exception:
+        corpo = "(não foi possível ler a tela)"
+    partes.append(f"texto_visível={corpo}")
+    return " | ".join(partes)
+
+
+def finalizar_unidade(pagina: Page, log=print, dry_run: bool = False) -> bool:
     """Clica em 'Terminar' (Etapa 5) e confirma o sucesso da criação.
 
-    Confirmação (até 20 s): toast com /(Sucesso|Salvo|Criado|Success|Created)/i
-    visível, OU o título "Adicionar unidade" sair da tela / a URL mudar.
-    Retorna True somente se algo for confirmado; senão False + aviso com o
-    texto visível da tela (primeiros 300 chars do body) para diagnóstico.
+    `url_antes` é capturado ANTES de chamar _clicar_terminar.
+    Sucesso = toast /(Sucesso|Salvo|Criado|Success|Created)/i visível
+      OU (URL mudou E o título "Adicionar unidade" não está mais visível).
+    Se aparecer mensagem de erro (/(Erro|Error|Falha|inválid|obrigatóri)/i visível),
+    retorna False imediatamente, logando o texto.
+    Em dry-run, não clica em Terminar e retorna True.
     """
-    _clicar_terminar(pagina)
+    if dry_run:
+        log("   [DRY-RUN] 'Terminar' NÃO será clicado.")
+        return True
 
     url_antes = pagina.url
+    _clicar_terminar(pagina)
 
     # Aguarda confirmação de sucesso (até 20 s)
     inicio = time.time()
     while time.time() - inicio < 20:
+        # Mensagem de erro -> falha imediata
+        try:
+            erro = pagina.get_by_text(
+                re.compile(r"(Erro|Error|Falha|inválid|obrigatóri)", re.IGNORECASE)
+            ).first
+            if erro.is_visible():
+                texto = erro.inner_text()[:300]
+                log(f"   [ERRO] Mensagem de erro ao finalizar: {texto}")
+                return False
+        except Exception:
+            pass
+
         # Toast de sucesso
         try:
             toast = pagina.get_by_text(
@@ -613,19 +726,16 @@ def finalizar_unidade(pagina: Page, log=print) -> bool:
         except Exception:
             pass
 
-        # O título "Adicionar unidade" saiu da tela
+        # URL mudou E o título "Adicionar unidade" não está mais visível
         try:
+            url_mudou = pagina.url != url_antes
             titulo = pagina.get_by_text("Adicionar unidade").first
-            if titulo.count() > 0 and not titulo.is_visible():
-                log("   Unidade criada com sucesso (tela 'Adicionar unidade' fechou).")
+            titulo_visivel = titulo.count() > 0 and titulo.is_visible()
+            if url_mudou and not titulo_visivel:
+                log("   Unidade criada com sucesso (URL alterada após Terminar).")
                 return True
         except Exception:
             pass
-
-        # A URL mudou
-        if pagina.url != url_antes:
-            log("   Unidade criada com sucesso (URL alterada após Terminar).")
-            return True
 
         pagina.wait_for_timeout(500)
 
@@ -646,34 +756,41 @@ def finalizar_unidade(pagina: Page, log=print) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def processar_criacao_unidade_panvel(pagina: Page, row, log=print) -> dict:
+def processar_criacao_unidade_panvel(pagina: Page, row, log=print, dry_run: bool = False) -> dict:
     """Executa todo o fluxo de criação de unidade Panvel (5 etapas do stepper).
 
     Fluxo:
-      abrir_tela -> clicar_adicionar_unidade -> preencher_informacao_basica ->
-      _clicar_proximo -> preencher_localizacao -> _clicar_proximo ->
-      pular_cameras (já clica Próximo) -> vincular_faces (já clica Próximo) ->
-      configurar_restricoes -> finalizar_unidade
+      abrir_tela -> (idempotência) -> clicar_adicionar_unidade ->
+      preencher_informacao_basica(nome_final=...) -> _clicar_proximo ->
+      preencher_localizacao -> _clicar_proximo -> pular_cameras ->
+      vincular_faces -> configurar_restricoes -> finalizar_unidade(dry_run)
 
     Retorna dict padronizado:
-      {"success": bool, "skipped": bool, "changed": bool, "message": str}
+      {"success": bool, "skipped": bool, "changed": bool, "dryrun": bool, "message": str}
     """
     try:
-        # Validação inicial: Filial/ID, Nome do Player, Latitude e Longitude são obrigatórias.
-        if not _obter_filial(row):
-            return {
-                "success": False,
-                "skipped": False,
-                "changed": False,
-                "message": "Coluna 'Filial' (ou 'ID') ausente ou vazia na planilha.",
-            }
-        if not _obter(row, COLUNA_NOME_PLAYER):
+        nome_player = _obter(row, COLUNA_NOME_PLAYER)
+        if not nome_player:
             return {
                 "success": False,
                 "skipped": False,
                 "changed": False,
                 "message": "Coluna 'Nome do Player' ausente ou vazia na planilha.",
             }
+
+        # Nome calculado uma única vez por linha.
+        nome_final = _nome_final(row, log=log)
+
+        # Filial/ID exigido SOMENTE quando o nome NÃO está no padrão Panvel.
+        if not _nome_ja_formatado(nome_player):
+            if not _obter_filial(row):
+                return {
+                    "success": False,
+                    "skipped": False,
+                    "changed": False,
+                    "message": "Coluna 'Filial' (ou 'ID') ausente ou vazia na planilha.",
+                }
+
         if not _obter(row, COLUNA_LATITUDE):
             return {
                 "success": False,
@@ -689,13 +806,58 @@ def processar_criacao_unidade_panvel(pagina: Page, row, log=print) -> dict:
                 "message": "Coluna 'Longitude' ausente ou vazia na planilha.",
             }
 
+        try:
+            linha_excel = int(row.get("_linha_excel", 0))
+        except Exception:
+            linha_excel = 0
+
         abrir_tela_criacao_unidade(pagina)
         log("   Tela de criação de unidade aberta.")
+
+        # --- Idempotência: pesquisar o nome final na lista ANTES de clicar em Adicionar ---
+        try:
+            pagina.locator('input[placeholder="Pesquisar"]').first.wait_for(
+                state="visible", timeout=TIMEOUT_ELEMENTO
+            )
+        except PlaywrightTimeoutError:
+            pass
+        try:
+            campo_pesquisa = pagina.locator('input[placeholder="Pesquisar"]').first
+            campo_pesquisa.click()
+            campo_pesquisa.fill(nome_final)
+            campo_pesquisa.press("Enter")
+        except Exception:
+            pass
+        pagina.wait_for_timeout(1000)
+
+        linha_existente = None
+        try:
+            linha_existente = escolher_linha(pagina, nome_final, timeout=4000, log=log)
+        except RuntimeError as e:
+            # Ambiguidade (várias parecidas, nenhuma exata) = "não existe igual": segue criando.
+            log(f"   [AVISO] {e}")
+            linha_existente = None
+
+        if linha_existente is not None:
+            # Só conta como existente se alguma CÉLULA tiver texto IGUAL ao nome.
+            try:
+                celulas = linha_existente.locator(SELETOR_CELULA).all_inner_texts()
+            except Exception:
+                celulas = []
+            if any(chave(c) == chave(nome_final) for c in celulas):
+                log("   [IDEMPOTENCIA] Unidade já existe na lista (nada criado).")
+                return {
+                    "success": True,
+                    "skipped": True,
+                    "changed": False,
+                    "message": "unidade já existe (nada criado)",
+                }
+            # correspondência parcial não conta: segue criando
 
         clicar_adicionar_unidade(pagina)
         log("   Botão 'Adicionar' clicado.")
 
-        preencher_informacao_basica(pagina, row, log=log)
+        preencher_informacao_basica(pagina, row, log=log, nome_final=nome_final)
         _clicar_proximo(pagina)
 
         preencher_localizacao(pagina, row, log=log)
@@ -706,7 +868,25 @@ def processar_criacao_unidade_panvel(pagina: Page, row, log=print) -> dict:
         vincular_faces(pagina, row, log=log)  # já clica em Próximo ao final
 
         configurar_restricoes(pagina, log=log)
-        salvou = finalizar_unidade(pagina, log=log)
+        salvou = finalizar_unidade(pagina, log=log, dry_run=dry_run)
+
+        if dry_run:
+            # Screenshot do estado até Restrições (Terminar NÃO clicado).
+            try:
+                PASTA_ERROS = Path(__file__).resolve().parent.parent / "erros"
+                PASTA_ERROS.mkdir(exist_ok=True)
+                destino = PASTA_ERROS / f"dryrun_L{linha_excel}.png"
+                pagina.screenshot(path=str(destino))
+                log(f"   [DRY-RUN] Screenshot: {destino.name}")
+            except Exception:
+                pass
+            return {
+                "success": True,
+                "skipped": False,
+                "changed": False,
+                "dryrun": True,
+                "message": "dry-run: preenchido até Restrições (Terminar NÃO clicado)",
+            }
 
         return {
             "success": salvou,
@@ -716,10 +896,11 @@ def processar_criacao_unidade_panvel(pagina: Page, row, log=print) -> dict:
         }
 
     except Exception as e:
+        diag = _diagnostico(pagina)
         return {
             "success": False,
             "skipped": False,
             "changed": False,
-            "message": f"Erro: {e}",
+            "message": f"Erro: {e} | {diag}",
         }
 
