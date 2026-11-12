@@ -44,6 +44,23 @@ class ConfigDialog:
         ttk.Spinbox(anunciantes_inner, from_=1, to=999, textvariable=self.anunciantes_var, width=10).pack(side=tk.LEFT)
         ttk.Label(anunciantes_inner, text='  (valor usado no campo "Anunciantes por dia" das faces)', foreground='gray').pack(side=tk.LEFT, padx=(10, 0))
 
+        # Frame de simulação (apenas Panvel)
+        self.dryrun_frame = ttk.LabelFrame(main_frame, text='🧪 Simulação (Panvel)', padding='15')
+        self.dryrun_inner = ttk.Frame(self.dryrun_frame)
+        self.dryrun_inner.pack(fill=tk.X)
+        self.dry_run_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            self.dryrun_inner,
+            text='Simular (não clicar em Terminar)',
+            variable=self.dry_run_var,
+        ).pack(side=tk.LEFT)
+        ttk.Label(
+            self.dryrun_inner,
+            text='  Preenche até Restrições e tira screenshot, mas não finaliza a criação.',
+            foreground='gray',
+        ).pack(side=tk.LEFT, padx=(10, 0))
+        self.dryrun_frame.pack_forget()  # visível apenas no modo Panvel
+
         # Frame de credenciais
         cred_frame = ttk.LabelFrame(main_frame, text='🔐 Credenciais Invian', padding='15')
         cred_frame.pack(fill=tk.X, pady=(0, 15))
@@ -358,9 +375,18 @@ class ConfigDialog:
             self.anunciantes_frame.pack_forget()
         self._ajustar_tamanho()
 
+    def _atualizar_visibilidade_dryrun(self):
+        tipo = self.tipo_var.get()
+        if tipo == 'panvel':
+            self.dryrun_frame.pack(fill=tk.X, pady=(0, 15))
+        else:
+            self.dryrun_frame.pack_forget()
+        self._ajustar_tamanho()
+
     def _on_tipo_change(self):
         self._atualizar_visibilidade_horario()
         self._atualizar_visibilidade_anunciantes()
+        self._atualizar_visibilidade_dryrun()
         tipo = self.tipo_var.get()
         if tipo == 'unidades':
             self._log('Modo: Unidades — Usa as colunas de nome e de horário escolhidas acima')
@@ -415,6 +441,7 @@ class ConfigDialog:
             'coluna_horario': coluna_horario or None,
             'linha_cabecalho': getattr(self, '_linha_cabecalho', 1),
             'valor_anunciantes': valor_anunciantes,
+            'dry_run': self.dry_run_var.get(),
             'email': email,
             'senha': senha,
         }

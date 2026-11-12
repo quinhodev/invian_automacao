@@ -84,6 +84,7 @@ class AutomationRunner:
                 valor_anunciantes=config.get("valor_anunciantes"),
                 log=log,
                 parar=self._parar,
+                dry_run=config.get("dry_run", False),
             )
 
             erros = resumo["contagem"].get("erro", 0)

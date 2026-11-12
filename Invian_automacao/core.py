@@ -102,6 +102,8 @@ def _salvar_relatorio(resultados, log):
 
 
 def _status(res):
+    if res.get("dryrun"):
+        return "dryrun"
     if res.get("skipped"):
         return "pulado"
     if not res.get("success"):
@@ -109,7 +111,7 @@ def _status(res):
     return "alterado" if res.get("changed") else "ja_correto"
 
 
-def _rodar_fase(pagina, navegador, df, fase, coluna, col_horario, log, parar, resultados, valor_anunciantes=None):
+def _rodar_fase(pagina, navegador, df, fase, coluna, col_horario, log, parar, resultados, valor_anunciantes=None, dry_run=False):
     """Processa todas as linhas de uma fase. Retorna False se o navegador morreu."""
     if fase == "unidades":
         funcao, obter_nome = processar_linha_unidades, lambda r: obter_nome_player(r, coluna)
@@ -133,6 +135,8 @@ def _rodar_fase(pagina, navegador, df, fase, coluna, col_horario, log, parar, re
         try:
             if fase == "faces":
                 res = funcao(pagina, row, coluna, log, col_horario, valor_anunciantes=valor_anunciantes)
+            elif fase == "panvel":
+                res = funcao(pagina, row, coluna, log, col_horario, dry_run=dry_run)
             else:
                 res = funcao(pagina, row, coluna, log, col_horario)
         except Exception as e:
@@ -140,7 +144,7 @@ def _rodar_fase(pagina, navegador, df, fase, coluna, col_horario, log, parar, re
             _tirar_print(pagina, fase, linha, log)
 
         status = _status(res)
-        icone = {"alterado": "[OK]", "ja_correto": "[INFO]", "pulado": "[SKIP]", "erro": "[ERRO]"}[status]
+        icone = {"alterado": "[OK]", "ja_correto": "[INFO]", "pulado": "[SKIP]", "erro": "[ERRO]", "dryrun": "[DRY]"}[status]
         log(f"   {icone} {res.get('message', '')}")
         resultados.append(
             {"linha_excel": linha, "fase": fase, "nome": nome, "status": status,
@@ -167,6 +171,7 @@ def executar_automacao(
     valor_anunciantes=None,
     log=print,
     parar=None,
+    dry_run=False,
 ) -> dict:
     """
     Roda a automação completa. `parar` é um threading.Event opcional.
@@ -191,6 +196,11 @@ def executar_automacao(
         log("Planilha sem linhas para processar. Encerrando.")
         return {"contagem": {}, "relatorio": None, "interrompido": False, "navegador_fechou": False}
 
+    # --- Preflight (modo panvel): valida planilha ANTES de criar o navegador ---
+    if modo == "panvel":
+        from preflight import validar_panvel
+        validar_panvel(df, log=log)
+
     fases = ["unidades", "faces"] if modo == "ambos" else [modo]
     resultados, interrompido, navegador_fechou = [], False, False
 
@@ -208,7 +218,19 @@ def executar_automacao(
 
             try:
                 for fase in fases:
-                    if not _rodar_fase(pagina, navegador, df, fase, col_nome, col_horario, log, parar, resultados, valor_anunciantes=valor_anunciantes):
+                    if not _rodar_fase(
+                        pagina,
+                        navegador,
+                        df,
+                        fase,
+                        col_nome,
+                        col_horario,
+                        log,
+                        parar,
+                        resultados,
+                        valor_anunciantes=valor_anunciantes,
+                        dry_run=dry_run,
+                    ):
                         navegador_fechou = True
                         break
             except InterruptedError:

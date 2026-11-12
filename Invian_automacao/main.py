@@ -9,13 +9,13 @@ from core import executar_automacao  # noqa: E402
 
 
 def rodar_automacao_cli(modo="unidades", arquivo=None, aba=None, linha_inicial=None, linha_cabecalho=1,
-                        headless=None, coluna=None, coluna_horario=None, valor_anunciantes=None) -> int:
+                        headless=None, coluna=None, coluna_horario=None, valor_anunciantes=None, dry_run=False) -> int:
     """Roda no terminal. Retorna 0 se tudo ok, 1 se houve erro em alguma linha."""
     resumo = executar_automacao(
         modo=modo, arquivo=arquivo, aba=aba, linha_inicial=linha_inicial,
         headless=headless, coluna=coluna, coluna_horario=coluna_horario,
         linha_cabecalho=linha_cabecalho, valor_anunciantes=valor_anunciantes,
-        log=print,
+        log=print, dry_run=dry_run,
     )
     houve_erro = resumo["contagem"].get("erro", 0) > 0 or resumo["navegador_fechou"] or resumo["interrompido"]
     return 1 if houve_erro else 0
@@ -110,6 +110,7 @@ def parse_args():
     grupo = parser.add_mutually_exclusive_group()
     grupo.add_argument("--headless", action="store_true", help="Navegador invisível")
     grupo.add_argument("--visible", action="store_true", help="Navegador visível (padrão do config.py)")
+    parser.add_argument("--dry-run", action="store_true", help="Modo simulação: preenche até Restrições sem clicar em Terminar (apenas panvel)")
     return parser.parse_args()
 
 
@@ -121,6 +122,6 @@ if __name__ == "__main__":
             modo=args.modo, arquivo=args.arquivo, aba=args.aba,
             linha_inicial=args.linha, headless=headless, coluna=args.coluna,
             coluna_horario=args.coluna_horario, linha_cabecalho=args.cabecalho,
-            valor_anunciantes=args.anunciantes,
+            valor_anunciantes=args.anunciantes, dry_run=args.dry_run,
         ))
     sys.exit(rodar_gui())

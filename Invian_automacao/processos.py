@@ -75,7 +75,7 @@ def processar_linha_faces(pagina, row, coluna_face=None, log=print, coluna_horar
     }
 
 
-def processar_linha_panvel(pagina, row, coluna=None, log=print, coluna_horario=None) -> dict:
+def processar_linha_panvel(pagina, row, coluna=None, log=print, coluna_horario=None, dry_run=False) -> dict:
     from unidade_panvel import processar_criacao_unidade_panvel
 
     # O contador de sequencial (_01, _02) é preparado UMA vez por execução em core.py
@@ -85,10 +85,11 @@ def processar_linha_panvel(pagina, row, coluna=None, log=print, coluna_horario=N
         return {"success": True, "skipped": True, "message": "nome do player vazio"}
 
     log(f"   Criando unidade Panvel para: {nome}")
-    r = processar_criacao_unidade_panvel(pagina, row, log=log)
+    r = processar_criacao_unidade_panvel(pagina, row, log=log, dry_run=dry_run)
     return {
         "success": r["success"],
         "skipped": r.get("skipped", False),
         "changed": r.get("changed", False),
+        "dryrun": r.get("dryrun", False),
         "message": r["message"],
     }
