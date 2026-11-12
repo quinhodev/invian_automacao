@@ -1,85 +1,64 @@
 # HANDOFF — Criação de Unidade Panvel (Aba 1)
 
-Branch: `fix/criacao-unidade-aba1`  
-Commit: `0341b18851094f5fb6625df19d13dc21dfd5e200`  
-Link: https://github.com/quinhodev/invian_automacao/commit/0341b18851094f5fb6625df19d13dc21dfd5e200
+Branch: `fix/criacao-unidade-aba1`
+Commit: `6e324734412b1ecb4b916be85351726a9d5c42bd`
+Link: https://github.com/quinhodev/invian_automacao/commit/6e324734412b1ecb4b916be85351726a9d5c42bd
 
 ---
 
 ## O que foi alterado — arquivo por arquivo
 
-### `.gitignore` (raiz)
-- Adicionado `.env` para evitar commit acidental de variáveis de ambiente.
+### `Invian_automacao/unidade_panvel.py` (reescrito)
+- Novo `_painel_atual(pagina)`: painel ativo do stepper (`.mat-horizontal-stepper-content-current`); todo helper busca DENTRO dele, nunca na página toda.
+- Novo `_campo(escopo, rotulo)`: mat-form-field pelo label exato (aceita "*"), match exato via `web_utils.chave`.
+- Novo `_preencher_input(escopo, rotulo, valor)`: click, Ctrl+A, fill.
+- Novo `_selecionar_opcao(pagina, escopo, rotulo, texto=None)`: abre mat-select; overlay `.cdk-overlay-pane:visible`.last; ignora campo de busca dentro de mat-option e `aria-disabled="true"`; `texto=None` → primeira opção válida; `texto` informado → match exato (parcial só se único) por índice; erro → Escape + RuntimeError listando opções; espera o overlay fechar.
+- Novo `_clicar_proximo(pagina)` / `_clicar_terminar(pagina)`: espera habilitar ~6 s, `RuntimeError` se não habilitar, espera o painel sair do "current" (~800 ms).
+- Etapa 1 (`preencher_informacao_basica`): nome já formatado (Panvel + `MED-TV_\d+`) é mantido; senão monta com `_gerar_sequencial` (Filial/ID exigido só então). `LOCALIZACAO_PADRAO` obrigatória (`RuntimeError` se vazia). Cidade e Endereço obrigatórios (`RuntimeError` explícito).
+- Etapa 2 (`preencher_localizacao`): "lat, long" com 6 casas, separador `", "`; `Tab` (sem Enter); sem busca por "Confirmar Ponto".
+- Etapa 3 (`pular_cameras`): log + Próximo.
+- Etapa 4 (`vincular_faces`): botão "Adicionar" no painel → modal "Adicionar Face" → Tipo de face (1ª opção) → Dimensões (1ª válida) → Salvar (1 clique) → espera modal fechar (15 s) + "1 faces" → Próximo.
+- Etapa 5 (`configurar_restricoes` apenas log; `finalizar_unidade` substitui `salvar_unidade`): clica "Terminar"; confirma toast `/(Sucesso|Salvo|Criado|Success|Created)/i` ou fechamento da tela / mudança de URL (até 20 s); senão `False` + aviso com 300 chars do `body`.
+- `processar_criacao_unidade_panvel`: fluxo `abrir_tela → clicar_adicionar_unidade → Etapa1 → Próximo → Etapa2 → Próximo → pular_cameras → vincular_faces → Restrições → finalizar_unidade`. Latitude/Longitude obrigatórias; log "Botão 'Adicionar' clicado".
+- Removidos: `_clicar_aba`, `_preencher_campo_texto`, `salvar_unidade`, `faceTag`, `btn-add-face`, fill com nome do player, busca por "Confirmar Ponto".
 
 ### `Invian_automacao/config.py`
-- `URL_CRIACAO_UNIDADE`: alterada de `/settings/inventory/units/create` para
-  `/settings/inventory/units` (tela da lista de unidades; o botão "Adicionar" está lá).
-- Adicionadas constantes:
-  - `LOCALIZACAO_PADRAO = ""` (valor ainda a definir com o usuário)
-  - `TIPO_ELEMENTO_PADRAO = "Digital"`
-  - `TIPO_UNIDADE_PADRAO = "Painel LED"`
+- Sem alterações funcionais: já continha `LOCALIZACAO_PADRAO = ""`, `TIPO_ELEMENTO_PADRAO = "Digital"`, `TIPO_UNIDADE_PADRAO = "Painel LED"` e as colunas usadas.
 
-### `Invian_automacao/unidade_panvel.py`
-a) `clicar_adicionar_unidade`: espera `input[placeholder="Pesquisar"]:visible`, depois
-   `get_by_role("button", name=/^\s*Adicionar\s*$/)` com fallbacks
-   (`button:has(mat-icon[data-mat-icon-name="plus"])`,
-    `button.mat-mdc-unelevated-button:has-text("Adicionar")`). Levanta RuntimeError claro se não achar.
-b) `_obter_filial(row)`: retorna `COLUNA_FILIAL` ou `COLUNA_ID` como fallback. Usado na validação
-   de `processar_criacao_unidade_panvel` (remove a lista de alternativas improvisada) e em
-   `preparar_sequenciais`.
-c) `preencher_informacao_basica`: se o nome da planilha já contém `MED-TV_\d+` e "Panvel",
-   usa como está (não chama `_gerar_sequencial`); senão monta com `_normalizar_nome_panvel`.
-d) Novos helpers baseados em rótulo do mat-form-field:
-   - `_campo(pagina, rotulo)`: mat-form-field com label exatamente igual ao rótulo (aceita "*" no final)
-   - `_preencher_input(pagina, rotulo, valor)`: input/textarea do campo (click, Ctrl+A, fill)
-   - `_selecionar_opcao(pagina, rotulo, texto)`: abre mat-select, filtra por busca se houver,
-     escolhe mat-option de texto igual (chave() ignora acento/caixa); parcial só se único;
-     RuntimeError listando opções vistas caso contrário
-   - `_clicar_proximo(pagina)`: botão "Próximo"; aguarda até ~6 s habilitar; RuntimeError se não habilitar
-   Substituem `_preencher_campo_texto` e `_clicar_aba`.
-e) Aba 1 preenche: Nome (input), Localização (select, LOCALIZACAO_PADRAO), Tipo de elemento
-   (select), Tipo de unidade (select), Cidade (select, coluna Cidade), Endereço (input, coluna
-   "Rua e Número"). Filial e Estado removidos do formulário. Descrição fica em branco.
-f) `processar_criacao_unidade_panvel`: fluxo Aba1 → Próximo → Aba2 → Próximo → Aba3 → Próximo →
-   Aba4 → Salvar. Abas 2–4 mantidas com `# TODO: seletores não validados`.
+### `HANDOFF.md` / `CHANGELOG.md`
+- Reescrito; nova seção v2.3 no CHANGELOG.
 
 ---
 
-## O que foi verificado — e resultado
+## Verificação — resultado
 
 | Verificação | Resultado |
 |---|---|
-| `python -m py_compile config.py unidade_panvel.py` | OK (sem erros) |
-| `import unidade_panvel, config` a partir de `Invian_automacao/` | OK |
-| `URL_CRIACAO_UNIDADE` = `https://web.invian.net/settings/inventory/units` | OK |
-| `LOCALIZACAO_PADRAO = ""`, `TIPO_ELEMENTO_PADRAO = "Digital"`, `TIPO_UNIDADE_PADRAO = "Painel LED"` | OK |
-| `_obter_filial` com coluna Filial → retorna valor da Filial | OK |
-| `_obter_filial` sem coluna Filial (só ID) → retorna valor do ID | OK |
-| `_obter_filial` sem nenhuma das duas → retorna `""` | OK |
-| Detecção de nome já formatado (contém `MED-TV_\d+` e "Panvel") | OK |
-| Detecção de nome NÃO formatado (falta Panvel ou falta MED-TV_) | OK |
-| `_normalizar_nome_panvel("638", "Campo Largo", "MED-TV_43", "_01")` → `"638 - Panvel Campo Largo MED-TV_43_01"` | OK |
-| `_normalizar_nome_panvel` sem sequencial → sem sufixo | OK |
+| `python -m py_compile config.py unidade_panvel.py` | OK, sem avisos |
+| `import config, unidade_panvel` a partir de `Invian_automacao/` | OK |
+| `_obter_filial` (com Filial / fallback ID / vazio) | OK |
+| detecção de nome já formatado | OK |
+| `_normalizar_nome_panvel` | OK |
+| `_formatar_coordenada` (6 casas, vírgula→ponto) | OK |
+| montagem "lat, long" (6 casas, separador `, `) | OK |
 
 ---
 
-## O que NÃO foi testado
-
-- **Seletores contra o Invian real**: não há acesso ao navegador nem ao ambiente web.invian.net
-  neste ambiente de análise. Todos os seletores de Abas 2–4 (Localização, Faces, Restrições)
-  e os novos seletores de Aba 1 (mat-form-field por rótulo, mat-select overlay, botão "Próximo")
-  são baseados em descrição do usuário, não validados em execução real.
-- O robô **não deve ser rodado contra o Invian real** antes da validação dos seletores.
+## Não testado
+- Execução contra o `web.invian.net` real (não há navegador/acesso neste ambiente). Seletores do stepper/modal baseiam-se na descrição da tela real fornecida pelo usuário.
 
 ---
 
-## TODOs e dúvidas em aberto
+## Pendências / dúvidas para o Marcos
+1. Definir `LOCALIZACAO_PADRAO` em `config.py` (atualmente `""` → gera `RuntimeError` claro na Etapa 1).
+2. Validar os seletores dos selects ("Localização", "Tipo de elemento", "Tipo de unidade", "Cidade", "Tipo de face", "Dimensões") e dos botões "Próximo"/"Terminar"/"Salvar"/"Adicionar" em tela real.
+3. Confirmar se o overlay do mat-select usa `.cdk-overlay-pane` e se o campo "Pesquisar" fica dentro de um `mat-option` (ngx-mat-select-search), conforme descrito.
 
-1. **`LOCALIZACAO_PADRAO = ""`** em `config.py`: valor ainda a definir com o usuário.
-   Quando preenchido, será usado no select "Localização" da Aba 1.
-2. **Abas 2–4 (Localização, Faces, Restrições)**: seletores não validados. Marcados com
-   `# TODO: seletores não validados`. Precisam de prints das telas reais para ajustar.
-3. **`_clicar_proximo`**: depende do botão "Próximo" estar visível e habilitar após o preenchimento
-   da Aba 1. Não testado em tela real.
-4. **`_selecionar_opcao`**: depende da estrutura do overlay do mat-select (CDK overlay pane)
-   e da existência de input de busca dentro dele. Não testado em tela real.
+---
+
+## Decisões tomadas pelo agente (por conta própria)
+- Manteve `config.py` inalterado (constantes já existiam); `LOCALIZACAO_PADRAO=""` propositalmente gera `RuntimeError` para forçar a definição pelo usuário.
+- Renomeou `salvar_unidade` → `finalizar_unidade`; `configurar_restricoes` agora só registra log ("nada a configurar").
+- `finalizar_unidade` retorna `False` (não `True`) quando não há confirmação de sucesso, com aviso de diagnóstico.
+- `_selecionar_opcao` clica por índice (`opcoes.nth(i)`), nunca por `:has-text`, e devolve o texto da opção escolhida.
+- Não commitar `.env`, `*.xlsx`, `relatorios/`, `erros/` nem artefatos (`compile_output.txt`, `__pycache__`).

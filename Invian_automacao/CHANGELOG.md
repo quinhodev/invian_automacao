@@ -1,3 +1,23 @@
+## v2.3 — Reescrita do fluxo de criação de unidade Panvel (stepper de 5 etapas)
+
+### `Invian_automacao/unidade_panvel.py`
+- Reescrito com helpers de escopo: `_painel_atual`, `_campo`, `_preencher_input`, `_selecionar_opcao`, `_clicar_proximo`, `_clicar_terminar`. Toda busca de campo ocorre dentro do painel ativo do stepper (`.mat-horizontal-stepper-content-current`), nunca na página toda.
+- Etapa 1 (Informação Básica): nome já formatado (Panvel + `MED-TV_\d+`) mantido; `LOCALIZACAO_PADRAO` obrigatória; Cidade e Endereço obrigatórios com `RuntimeError` explícito.
+- Etapa 2 (Localização): preenche "lat, long" (6 casas, separador `, `), `Tab` sem Enter; removida busca por "Confirmar Ponto".
+- Etapa 3 (Câmeras): nova `pular_cameras()` (log + Próximo).
+- Etapa 4 (Faces): `vincular_faces()` reescrito — botão "Adicionar" no painel, modal "Adicionar Face", Tipo de face + Dimensões (primeira opção válida), Salvar (um clique), espera fechamento do modal (15 s) e "1 faces".
+- Etapa 5 (Restrições): `configurar_restricoes()` apenas log; `salvar_unidade()` renomeado para `finalizar_unidade()`, clica "Terminar" e confirma sucesso (toast / fechamento da tela / mudança de URL, até 20 s); retorna `False` com aviso de diagnóstico se não confirmar.
+- `processar_criacao_unidade_panvel`: fluxo completo Abrir → Adicionar → Etapa1 → Próximo → Etapa2 → Próximo → Câmeras → Faces → Restrições → Terminar.
+- Removidos: `_clicar_aba`, `_preencher_campo_texto`, `salvar_unidade`, `faceTag`, `btn-add-face`.
+
+### `Invian_automacao/config.py`
+- Sem alterações (já continha `LOCALIZACAO_PADRAO`, `TIPO_ELEMENTO_PADRAO`, `TIPO_UNIDADE_PADRAO`).
+
+### `HANDOFF.md` (raiz)
+- Reescrito com Branch/Commit/Link, alterações, verificação, não testado, pendências e decisões do agente.
+
+---
+
 # Correções e melhorias
 
 ## v2.2 — Ajustes na criação de unidade Panvel (Aba 1)
