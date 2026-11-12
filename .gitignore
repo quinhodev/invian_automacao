@@ -51,3 +51,6 @@ env/
 
 # Variáveis de ambiente
 .env
+
+# Saída de compilação (py_compile)
+compile_output.txt
