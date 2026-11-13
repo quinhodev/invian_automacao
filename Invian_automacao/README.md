@@ -172,12 +172,59 @@ Para adicionar uma nova tela (ex.: campanhas):
 
 ---
 
+## Testes
+
+Executar a suíte de testes (dentro de `Invian_automacao/`):
+
+```bash
+# Instalar dependências de dev
+pip install -r requirements-dev.txt
+playwright install chromium
+
+# Rodar todos os testes
+python -m pytest tests -q
+```
+
+Os testes usam um simulador local (`mock_invian/index.html`) em vez do Invian real,
+cobrindo: funções puras, fluxo completo no mock (sucesso, erro, idempotência, dry-run)
+e validação de preflight.
+
+## Preflight (modo panvel)
+
+Antes de abrir o navegador, `preflight.validar_panvel()` valida a planilha e levanta
+`ValueError` listando **todos** os problemas (cada um com o número da linha real do Excel):
+
+- Colunas ausentes: Nome do Player, Rua e Número, Cidade, Latitude, Longitude e (Filial ou ID)
+- Por linha: nome/rua/cidade vazios; latitude/longitude vazias, não numéricas ou fora de range
+- Linhas repetidas (mesmo Nome do Player + mesma Filial/ID)
+- `LOCALIZACAO_PADRAO` vazio => apenas aviso (não é erro)
+
+## Dry-run (modo panvel)
+
+Simula a criação sem clicar em "Terminar":
+
+**CLI:**
+```bash
+python main.py --cli --modo panvel --arquivo dados.xlsx --aba Planilha1 --linha 2 --dry-run
+```
+
+**GUI:** marque o checkbox "Simular (não clicar em Terminar)" (visível apenas no modo Panvel).
+
+Em dry-run o robô preenche todas as 5 etapas até Restrições, tira um screenshot em
+`erros/dryrun_L<linha>.png` e NÃO clica em Terminar. O status no log/relatório é `dryrun`.
+
 ## Requisitos
 
 ```
 pandas
 openpyxl
 playwright
+```
+
+Para desenvolvimento/testes:
+```
+pytest
+pytest-playwright
 ```
 
 Python 3.10+ recomendado.

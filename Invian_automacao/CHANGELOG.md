@@ -1,4 +1,58 @@
-## v2.3 — Reescrita do fluxo de criação de unidade Panvel (stepper de 5 etapas)
+## v2.4 — Robustez da criação de unidade Panvel: preflight, dry-run e testes
+
+### `Invian_automacao/unidade_panvel.py`
+- `finalizar_unidade`: captura `url_antes` ANTES de `_clicar_terminar`; sucesso = toast
+  `/(Sucesso|Salvo|Criado|Success|Created)/i` visível OU (URL mudou E título "Adicionar
+  unidade" não visível); erro visível => `False` imediato com log do texto.
+- `_nome_final(row, log)`: nome calculado uma única vez por linha (usa `_nome_ja_formatado`;
+  senão monta com `_normalizar_nome_panvel` + `_gerar_sequencial` que roda 1 vez por linha).
+- Idempotência: antes de clicar em "Adicionar unidade", pesquisa o nome final na lista
+  (campo "Pesquisar" + `escolher_linha` com timeout 4s); conta como existente só se alguma
+  célula tiver texto igual ao nome; correspondência parcial não conta.
+- Localização (Etapa 1): se `LOCALIZACAO_PADRAO` vazio, escolhe a 1ª opção válida e loga
+  aviso; sem `RuntimeError`.
+- `_selecionar_opcao`: digita texto no campo de busca do overlay e espera ~600 ms antes de
+  coletar opções; após clicar na opção, espera `mat-option` sumir (não espera o pane sumir).
+- `_clicar_proximo` / `_clicar_terminar`: captura `painel.element_handle()` ANTES do clique
+  para o `wait_for_function`.
+- `_campo`: `RuntimeError` lista os rótulos vistos no escopo quando não encontra o rótulo.
+- `_diagnostico(pagina)`: etapa atual do stepper + primeiros 300 chars de texto visível,
+  anexado ao `message` do `except`.
+- `processar_criacao_unidade_panvel`: exige Filial/ID só quando o nome NÃO está no padrão Panvel.
+
+### `Invian_automacao/preflight.py` (novo)
+- `validar_panvel(df, log)`: chamado por `core.executar_automacao` depois de carregar a
+  planilha e antes de criar o navegador (modo panvel). Levanta `ValueError` com todos os
+  problemas (colunas ausentes, campos vazios/fora de range, duplicatas), cada um com o
+  número da linha real do Excel (`_linha_excel`). `LOCALIZACAO_PADRAO` vazio => apenas aviso.
+
+### Modo `--dry-run`
+- CLI: flag `--dry-run`; GUI: checkbox "Simular (não clicar em Terminar)" (só no modo Panvel).
+- Propagado: `main` → `core.executar_automacao(dry_run)` → `_rodar_fase` →
+  `processar_linha_panvel` → `processar_criacao_unidade_panvel(dry_run)`.
+- Em dry-run: preenche até Restrições, screenshot em `erros/dryrun_L<linha>.png`, NÃO clica
+  em Terminar. Retorna `{"success": True, "changed": False, "dryrun": True, ...}`.
+- `core._status`: `res.get("dryrun")` => status `"dryrun"` (ícone no log e no CSV).
+
+### Testes (`Invian_automacao/tests/`)
+- `conftest.py`, `test_puros.py`, `test_fluxo_mock.py`, `test_preflight.py`,
+  `mock_invian/index.html` (simulador local com query params `?erro=1`, `?existe=`,
+  `?parecida=`).
+- `test_localizacao_vazia_usa_primeira_opcao`: `LOCALIZACAO_PADRAO` vazio => usa "Interna",
+  `success True`.
+- `test_erro_1_sucesso_false_menos_8s`: `?erro=1` => erro ao Terminar, `success False` < 8s.
+- `test_existe_skipped_true`: `?existe=<nome>` => idempotência detecta, `skipped True`,
+  `window.__terminar == 0`.
+- `test_parecida_nao_conta_existente`: `?parecida=<nome>` => correspondência parcial não
+  conta, segue criando.
+- `test_dry_run`: `dryrun True`, `success True`, `window.__terminar == 0`, screenshot gerado.
+- `test_preflight.py`: um teste por problema de validação (colunas ausentes, campos vazios,
+  não numéricos, fora de range, duplicatas, LOCALIZACAO_PADRAO vazio).
+
+### `.gitignore`
+- Adicionado `.env`, `*.xlsx`, `relatorios/`, `erros/`, `compile_output.txt`.
+
+### `Invian_automacao/unidade_panvel.py` (continuação da v2.3)
 
 ### `Invian_automacao/unidade_panvel.py`
 - Reescrito com helpers de escopo: `_painel_atual`, `_campo`, `_preencher_input`, `_selecionar_opcao`, `_clicar_proximo`, `_clicar_terminar`. Toda busca de campo ocorre dentro do painel ativo do stepper (`.mat-horizontal-stepper-content-current`), nunca na página toda.

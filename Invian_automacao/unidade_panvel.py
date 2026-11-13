@@ -186,8 +186,14 @@ def _nome_ja_formatado(nome: str) -> bool:
 
 
 def abrir_tela_criacao_unidade(pagina: Page) -> None:
-    """Navega até a tela de criação de unidade e aguarda o carregamento."""
-    pagina.goto(URL_CRIACAO_UNIDADE, wait_until="domcontentloaded", timeout=TIMEOUT_NAVEGACAO)
+    """Navega até a tela de criação de unidade e aguarda o carregamento.
+
+    Não re-navega se já estiver no caminho correto (preserva query params
+    como ?existe=, ?erro=1, ?parecida= usados pelos testes).
+    """
+    from urllib.parse import urlparse
+    if urlparse(pagina.url).path != urlparse(URL_CRIACAO_UNIDADE).path:
+        pagina.goto(URL_CRIACAO_UNIDADE, wait_until="domcontentloaded", timeout=TIMEOUT_NAVEGACAO)
     aguardar_carregamento(pagina)
 
 
@@ -232,7 +238,7 @@ def clicar_adicionar_unidade(pagina: Page) -> None:
 
     botao.scroll_into_view_if_needed()
     botao.click()
-    pagina.wait_for_timeout(1000)
+    pagina.wait_for_timeout(300)
     aguardar_carregamento(pagina, 5000)
 
 
@@ -428,21 +434,21 @@ def _clicar_proximo(pagina: Page) -> None:
                 break
         except Exception:
             pass
-        pagina.wait_for_timeout(200)
+        pagina.wait_for_timeout(100)
     if not clicado:
         raise RuntimeError(
             "Botão 'Próximo' não habilitou dentro do tempo esperado (~6 s). "
             "Verifique se todos os campos obrigatórios da etapa foram preenchidos."
         )
-    # Aguarda o painel anterior perder a classe "current" (ou ~800 ms) antes de seguir.
+    # Aguarda o painel anterior perder a classe "current" (ou ~300 ms) antes de seguir.
     try:
         pagina.wait_for_function(
             "(el) => !el.classList.contains('mat-horizontal-stepper-content-current')",
             arg=painel_handle,
-            timeout=800,
+            timeout=300,
         )
     except Exception:
-        pagina.wait_for_timeout(800)
+        pagina.wait_for_timeout(300)
 
 
 def _clicar_terminar(pagina: Page) -> None:
@@ -462,7 +468,7 @@ def _clicar_terminar(pagina: Page) -> None:
                 break
         except Exception:
             pass
-        pagina.wait_for_timeout(200)
+        pagina.wait_for_timeout(100)
     if not clicado:
         raise RuntimeError(
             "Botão 'Terminar' não habilitou dentro do tempo esperado (~6 s)."
@@ -471,10 +477,10 @@ def _clicar_terminar(pagina: Page) -> None:
         pagina.wait_for_function(
             "(el) => !el.classList.contains('mat-horizontal-stepper-content-current')",
             arg=painel_handle,
-            timeout=800,
+            timeout=300,
         )
     except Exception:
-        pagina.wait_for_timeout(800)
+        pagina.wait_for_timeout(300)
 
 
 
@@ -571,7 +577,7 @@ def preencher_localizacao(pagina: Page, row, log=print) -> None:
     _preencher_input(_painel_atual(pagina), "Localização", texto)
     # Tira o foco do campo para disparar a atualização do mapa; NÃO aperta Enter.
     pagina.keyboard.press("Tab")
-    pagina.wait_for_timeout(1500)
+    pagina.wait_for_timeout(300)
 
     log(f"   Etapa 2 (Localização) preenchida: {texto}")
 
@@ -828,7 +834,6 @@ def processar_criacao_unidade_panvel(pagina: Page, row, log=print, dry_run: bool
             campo_pesquisa.press("Enter")
         except Exception:
             pass
-        pagina.wait_for_timeout(1000)
 
         linha_existente = None
         try:
@@ -873,7 +878,7 @@ def processar_criacao_unidade_panvel(pagina: Page, row, log=print, dry_run: bool
         if dry_run:
             # Screenshot do estado até Restrições (Terminar NÃO clicado).
             try:
-                PASTA_ERROS = Path(__file__).resolve().parent.parent / "erros"
+                PASTA_ERROS = Path(__file__).resolve().parent / "erros"
                 PASTA_ERROS.mkdir(exist_ok=True)
                 destino = PASTA_ERROS / f"dryrun_L{linha_excel}.png"
                 pagina.screenshot(path=str(destino))
@@ -892,6 +897,7 @@ def processar_criacao_unidade_panvel(pagina: Page, row, log=print, dry_run: bool
             "success": salvou,
             "skipped": False,
             "changed": salvou,
+            "dryrun": False,
             "message": "unidade criada com sucesso" if salvou else "falha ao finalizar",
         }
 
@@ -901,6 +907,7 @@ def processar_criacao_unidade_panvel(pagina: Page, row, log=print, dry_run: bool
             "success": False,
             "skipped": False,
             "changed": False,
+            "dryrun": False,
             "message": f"Erro: {e} | {diag}",
         }
 

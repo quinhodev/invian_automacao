@@ -1,32 +1,66 @@
-# HANDOFF — Criação de Unidade Panvel (Aba 1)
+# HANDOFF — Criação de Unidade Panvel Robusta
 
-Branch: `fix/criacao-unidade-aba1`
-Commit: `6e324734412b1ecb4b916be85351726a9d5c42bd`
-Link: https://github.com/quinhodev/invian_automacao/commit/6e324734412b1ecb4b916be85351726a9d5c42bd
+Branch: `feat/criacao-unidade-robusta`
+Commit: `Último commit desta branch`
+Link: (será preenchido após push)
 
 ---
 
 ## O que foi alterado — arquivo por arquivo
 
-### `Invian_automacao/unidade_panvel.py` (reescrito)
-- Novo `_painel_atual(pagina)`: painel ativo do stepper (`.mat-horizontal-stepper-content-current`); todo helper busca DENTRO dele, nunca na página toda.
-- Novo `_campo(escopo, rotulo)`: mat-form-field pelo label exato (aceita "*"), match exato via `web_utils.chave`.
-- Novo `_preencher_input(escopo, rotulo, valor)`: click, Ctrl+A, fill.
-- Novo `_selecionar_opcao(pagina, escopo, rotulo, texto=None)`: abre mat-select; overlay `.cdk-overlay-pane:visible`.last; ignora campo de busca dentro de mat-option e `aria-disabled="true"`; `texto=None` → primeira opção válida; `texto` informado → match exato (parcial só se único) por índice; erro → Escape + RuntimeError listando opções; espera o overlay fechar.
-- Novo `_clicar_proximo(pagina)` / `_clicar_terminar(pagina)`: espera habilitar ~6 s, `RuntimeError` se não habilitar, espera o painel sair do "current" (~800 ms).
-- Etapa 1 (`preencher_informacao_basica`): nome já formatado (Panvel + `MED-TV_\d+`) é mantido; senão monta com `_gerar_sequencial` (Filial/ID exigido só então). `LOCALIZACAO_PADRAO` obrigatória (`RuntimeError` se vazia). Cidade e Endereço obrigatórios (`RuntimeError` explícito).
-- Etapa 2 (`preencher_localizacao`): "lat, long" com 6 casas, separador `", "`; `Tab` (sem Enter); sem busca por "Confirmar Ponto".
-- Etapa 3 (`pular_cameras`): log + Próximo.
-- Etapa 4 (`vincular_faces`): botão "Adicionar" no painel → modal "Adicionar Face" → Tipo de face (1ª opção) → Dimensões (1ª válida) → Salvar (1 clique) → espera modal fechar (15 s) + "1 faces" → Próximo.
-- Etapa 5 (`configurar_restricoes` apenas log; `finalizar_unidade` substitui `salvar_unidade`): clica "Terminar"; confirma toast `/(Sucesso|Salvo|Criado|Success|Created)/i` ou fechamento da tela / mudança de URL (até 20 s); senão `False` + aviso com 300 chars do `body`.
-- `processar_criacao_unidade_panvel`: fluxo `abrir_tela → clicar_adicionar_unidade → Etapa1 → Próximo → Etapa2 → Próximo → pular_cameras → vincular_faces → Restrições → finalizar_unidade`. Latitude/Longitude obrigatórias; log "Botão 'Adicionar' clicado".
-- Removidos: `_clicar_aba`, `_preencher_campo_texto`, `salvar_unidade`, `faceTag`, `btn-add-face`, fill com nome do player, busca por "Confirmar Ponto".
+### `Invian_automacao/unidade_panvel.py` (robustecido)
+- `finalizar_unidade`: captura `url_antes` ANTES de `_clicar_terminar`; sucesso = toast `/(Sucesso|Salvo|Criado|Success|Created)/i` visível OU (URL mudou E título "Adicionar unidade" não visível); erro visível => `False` imediato com log do texto.
+- `_nome_final(row, log)`: nome calculado uma única vez por linha.
+- Idempotência: antes de clicar em "Adicionar unidade", pesquisa o nome final na lista; conta como existente só se alguma célula tiver texto igual.
+- Localização (Etapa 1): se `LOCALIZACAO_PADRAO` vazio, escolhe a 1ª opção válida e loga aviso; sem `RuntimeError`.
+- `_selecionar_opcao`: digita texto no campo de busca do overlay e espera ~200 ms; após clicar, espera `mat-option` sumir.
+- `_clicar_proximo` / `_clicar_terminar`: captura `painel.element_handle()` ANTES do clique; polling 100 ms; fallback 300 ms.
+- `_campo`: `RuntimeError` lista os rótulos vistos no escopo.
+- `_diagnostico(pagina)`: etapa atual do stepper + primeiros 300 chars de texto visível.
+- `processar_criacao_unidade_panvel`: exige Filial/ID só quando o nome NÃO está no padrão Panvel; aceita `dry_run`.
 
-### `Invian_automacao/config.py`
-- Sem alterações funcionais: já continha `LOCALIZACAO_PADRAO = ""`, `TIPO_ELEMENTO_PADRAO = "Digital"`, `TIPO_UNIDADE_PADRAO = "Painel LED"` e as colunas usadas.
+### `Invian_automacao/preflight.py` (novo)
+- `validar_panvel(df, log)`: chamado por `core.executar_automacao` depois de carregar a planilha e antes de criar o navegador. Levanta `ValueError` com todos os problemas.
 
-### `HANDOFF.md` / `CHANGELOG.md`
-- Reescrito; nova seção v2.3 no CHANGELOG.
+### Modo `--dry-run` (novo)
+- CLI: flag `--dry-run`; GUI: checkbox "Simular (não clicar em Terminar)" só no modo Panvel.
+- Propagado: `main` → `core.executar_automacao(dry_run)` → `_rodar_fase` → `processar_linha_panvel` → `processar_criacao_unidade_panvel(dry_run)`.
+- Em dry-run: preenche até Restrições, screenshot em `erros/dryrun_L<linha>.png`, NÃO clica em Terminar.
+- `core._status`: `res.get("dryrun")` => status `"dryrun"` (ícone `[DRY]` no log e no CSV).
+
+### `Invian_automacao/core.py`
+- Adicionado parâmetro `dry_run` em `executar_automacao` e `_rodar_fase`.
+- Preflight chamado antes de criar navegador.
+
+### `Invian_automacao/processos.py`
+- `processar_linha_panvel` aceita e propaga `dry_run`; retorna campo `dryrun`.
+
+### `Invian_automacao/main.py`
+- CLI: adicionado `--dry-run`.
+
+### `Invian_automacao/gui/config_dialog.py`
+- Frame "Simulação (Panvel)" com checkbox "Simular (não clicar em Terminar)" visível só no modo Panvel.
+
+### `Invian_automacao/gui/automation_runner.py`
+- Propaga `dry_run` para `executar_automacao`.
+
+### `Invian_automacao/mock_invian/index.html` (atualizado)
+- Simulador local com query params: `?erro=1`, `?existe=<nome>`, `?parecida=<nome>`.
+
+### Testes (`Invian_automacao/tests/`)
+- `conftest.py`: sobe servidor HTTP local, aguarda ficar pronto.
+- `test_puros.py`: funções puras.
+- `test_preflight.py`: 16 testes.
+- `test_fluxo_mock.py`: 5 testes de fluxo.
+
+### `.gitignore`
+- Adicionado `.env`, `*.xlsx`, `relatorios/`, `erros/`, `compile_output.txt`.
+
+### `Invian_automacao/README.md`
+- Seções "Testes", "Preflight (modo panvel)", "Dry-run (modo panvel)" adicionadas.
+
+### `Invian_automacao/CHANGELOG.md`
+- Nova seção v2.4 documentando todas as alterações.
 
 ---
 
@@ -34,31 +68,27 @@ Link: https://github.com/quinhodev/invian_automacao/commit/6e324734412b1ecb4b916
 
 | Verificação | Resultado |
 |---|---|
-| `python -m py_compile config.py unidade_panvel.py` | OK, sem avisos |
-| `import config, unidade_panvel` a partir de `Invian_automacao/` | OK |
-| `_obter_filial` (com Filial / fallback ID / vazio) | OK |
-| detecção de nome já formatado | OK |
-| `_normalizar_nome_panvel` | OK |
-| `_formatar_coordenada` (6 casas, vírgula→ponto) | OK |
-| montagem "lat, long" (6 casas, separador `, `) | OK |
+| `python -m py_compile` (todos os .py alterados) | OK, sem avisos |
+| `python -m pytest tests -q` | 31 passed |
 
 ---
 
 ## Não testado
-- Execução contra o `web.invian.net` real (não há navegador/acesso neste ambiente). Seletores do stepper/modal baseiam-se na descrição da tela real fornecida pelo usuário.
+- Execução contra o `web.invian.net` real. Seletores baseiam-se na descrição da tela real.
 
 ---
 
 ## Pendências / dúvidas para o Marcos
-1. Definir `LOCALIZACAO_PADRAO` em `config.py` (atualmente `""` → gera `RuntimeError` claro na Etapa 1).
-2. Validar os seletores dos selects ("Localização", "Tipo de elemento", "Tipo de unidade", "Cidade", "Tipo de face", "Dimensões") e dos botões "Próximo"/"Terminar"/"Salvar"/"Adicionar" em tela real.
-3. Confirmar se o overlay do mat-select usa `.cdk-overlay-pane` e se o campo "Pesquisar" fica dentro de um `mat-option` (ngx-mat-select-search), conforme descrito.
+1. Definir `LOCALIZACAO_PADRAO` em `config.py` (atualmente `""` → usa 1ª opção com aviso).
+2. Validar seletores dos selects e botões em tela real.
+3. Confirmar overlay do mat-select e campo Pesquisar.
 
 ---
 
 ## Decisões tomadas pelo agente (por conta própria)
-- Manteve `config.py` inalterado (constantes já existiam); `LOCALIZACAO_PADRAO=""` propositalmente gera `RuntimeError` para forçar a definição pelo usuário.
-- Renomeou `salvar_unidade` → `finalizar_unidade`; `configurar_restricoes` agora só registra log ("nada a configurar").
-- `finalizar_unidade` retorna `False` (não `True`) quando não há confirmação de sucesso, com aviso de diagnóstico.
-- `_selecionar_opcao` clica por índice (`opcoes.nth(i)`), nunca por `:has-text`, e devolve o texto da opção escolhida.
-- Não commitar `.env`, `*.xlsx`, `relatorios/`, `erros/` nem artefatos (`compile_output.txt`, `__pycache__`).
+- Manteve `config.py` inalterado; `LOCALIZACAO_PADRAO=""` propositalmente usa 1ª opção com aviso.
+- Renomeou `salvar_unidade` → `finalizar_unidade`; `configurar_restricoes` só log.
+- `finalizar_unidade` retorna `False` quando não há confirmação.
+- `_selecionar_opcao` clica por índice (`opcoes.nth(i)`).
+- Waits fixos otimizados: 300ms, 200ms, fallback 300ms.
+- Não commitar `.env`, `*.xlsx`, `relatorios/`, `erros/`, `compile_output.txt`, `__pycache__`.

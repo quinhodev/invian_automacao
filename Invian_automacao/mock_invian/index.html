@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Mock Invian — Criação de Unidade Panvel</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: Arial, sans-serif; padding: 16px; }
+  .view { display: none; }
+  .view.active { display: block; }
+  .stepper-content { border: 1px solid #bbb; padding: 16px; margin-bottom: 16px; display: none; }
+  .stepper-content.mat-horizontal-stepper-content-current { display: block; }
+  mat-form-field { margin: 8px 0; display: block; }
+  mat-label { display: block; font-weight: bold; margin-bottom: 4px; }
+  input, mat-select { width: 100%; padding: 6px; }
+  mat-select { position: relative; }
+  button { padding: 6px 14px; cursor: pointer; margin: 4px 4px 4px 0; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .cdk-overlay-pane { position: absolute; background: #fff; border: 1px solid #999; z-index: 1000; display: none; padding: 8px; min-width: 140px; max-height: 200px; overflow-y: auto; }
+  .cdk-overlay-pane.visible { display: block; }
+  mat-option { padding: 6px 10px; cursor: pointer; display: block; }
+  mat-option[aria-disabled="true"] { color: #aaa; cursor: not-allowed; }
+  mat-option:hover { background: #e8e8e8; }
+  .toast, .erro { display: none; padding: 8px 12px; margin: 8px 0; }
+  .toast { background: #4caf50; color: #fff; }
+  .erro { background: #f44336; color: #fff; }
+  input[placeholder="Pesquisar"] { width: 100%; padding: 8px; margin-bottom: 12px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  mat-row { display: table-row; cursor: pointer; }
+  mat-row:nth-child(even) { background: #f9f9f9; }
+  mat-cell { display: table-cell; padding: 8px; border: 1px solid #ddd; }
+  .adicionar { background: #1976d2; color: #fff; border: none; }
+</style>
+</head>
+<body>
+<div id="view-list" class="view active">
+  <h3>Lista de Unidades</h3>
+  <input type="text" placeholder="Pesquisar" id="inp-pesquisa">
+  <button id="btn-adicionar" class="adicionar">Adicionar</button>
+  <table id="tb-unidades">
+    <thead><tr><th>Nome</th><th>Filial</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<div id="view-form" class="view">
+  <h3>Adicionar unidade</h3>
+  <div id="toast" class="toast">Unidade criada com sucesso.</div>
+  <div id="erro-msg" class="erro">Erro ao salvar unidade</div>
+
+  <div class="stepper-content mat-horizontal-stepper-content-current" id="step-1">
+    <h4>Etapa 1 — Informação Básica</h4>
+    <mat-form-field><mat-label>Nome</mat-label><input id="f-nome"></mat-form-field>
+    <mat-form-field><mat-label>Localização</mat-label><mat-select id="f-localizacao"></mat-select></mat-form-field>
+    <mat-form-field><mat-label>Tipo de elemento</mat-label><mat-select id="f-tipo-elemento"></mat-select></mat-form-field>
+    <mat-form-field><mat-label>Tipo de unidade</mat-label><mat-select id="f-tipo-unidade"></mat-select></mat-form-field>
+    <mat-form-field><mat-label>Cidade</mat-label><mat-select id="f-cidade"></mat-select></mat-form-field>
+    <mat-form-field><mat-label>Endereço</mat-label><input id="f-endereco"></mat-form-field>
+    <button id="btn-proximo-1">Próximo</button>
+  </div>
+  <div class="stepper-content" id="step-2">
+    <h4>Etapa 2 — Localização</h4>
+    <mat-form-field><mat-label>Localização</mat-label><input id="f-latlong"></mat-form-field>
+    <button id="btn-proximo-2">Próximo</button>
+  </div>
+
+  <div class="stepper-content" id="step-3">
+    <h4>Etapa 3 — Câmeras</h4>
+    <p>Sem câmeras.</p>
+    <button id="btn-proximo-3">Próximo</button>
+  </div>
+
+  <div class="stepper-content" id="step-4">
+    <h4>Etapa 4 — Faces</h4>
+    <button id="btn-add-face">Adicionar</button>
+    <div id="faces-lista">0 faces</div>
+    <button id="btn-proximo-4">Próximo</button>
+  </div>
+
+  <!-- Modal "Adicionar Face" (exibido ao clicar em Adicionar na Etapa 4) -->
+  <div role="dialog" class="mat-mdc-dialog-container" id="dlg-face" style="display:none;">
+    <h3>Adicionar Face</h3>
+    <mat-form-field><mat-label>Tipo de face</mat-label><mat-select id="dlg-tipo-face"></mat-select></mat-form-field>
+    <mat-form-field><mat-label>Dimensões</mat-label><mat-select id="dlg-dimensoes"></mat-select></mat-form-field>
+    <button id="btn-salvar-face">Salvar</button>
+    <button id="btn-cancelar-face">Cancelar</button>
+  </div>
+
+  <div class="stepper-content mat-horizontal-stepper-content-current" id="step-5">
+    <h4>Etapa 5 — Restrições</h4>
+    <p>Nenhuma restrição.</p>
+    <button id="btn-terminar">Terminar</button>
+  </div>
+</div>
+
+<div id="overlay" class="cdk-overlay-pane"></div>
+<script>
+window.__terminar = window.__terminar || 0;
+
+const OPCOES = {
+  "Localização": ["Interna", "Externa", "Remota"],
+  "Tipo de elemento": ["Digital", "Analogico"],
+  "Tipo de unidade": ["Painel LED", "LCD"],
+  "Cidade": ["Porto Alegre", "Canoas", "Sapiranga"],
+  "Tipo de face": ["Tag A", "Tag B"],
+  "Dimensões": ["30x20", "40x30"],
+};
+
+const qs = new URLSearchParams(window.location.search);
+const MODO_ERRO = qs.has("erro");
+const EXISTE = qs.get("existe") || null;
+const PARECIDA = qs.get("parecida") || null;
+
+let linhas = [];
+if (EXISTE) {
+  linhas = [{ nome: EXISTE, filial: "750" }];
+} else if (PARECIDA) {
+  linhas = [{ nome: PARECIDA + "_X", filial: "750" }];
+}
+
+const overlay = document.getElementById("overlay");
+let selectAtual = null;
+
+function renderTabela() {
+  const tbody = document.querySelector("#tb-unidades tbody");
+  tbody.innerHTML = "";
+  for (const l of linhas) {
+    const tr = document.createElement("mat-row");
+    tr.innerHTML = `<mat-cell>${l.nome}</mat-cell><mat-cell>${l.filial}</mat-cell>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function filtrar(query) {
+  const q = (query || "").toLowerCase();
+  const rows = document.querySelectorAll("#tb-unidades mat-row");
+  rows.forEach(r => {
+    const texto = r.innerText.toLowerCase();
+    r.style.display = texto.includes(q) ? "" : "none";
+  });
+}
+
+renderTabela();
+
+document.getElementById("inp-pesquisa").addEventListener("input", (e) => filtrar(e.target.value));
+document.getElementById("inp-pesquisa").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") filtrar(e.target.value);
+});
+
+document.getElementById("btn-adicionar").addEventListener("click", () => {
+  document.getElementById("view-list").classList.remove("active");
+  document.getElementById("view-form").classList.add("active");
+  mostrarStep(1);
+});
+
+document.querySelectorAll("mat-select").forEach(select => {
+  select.addEventListener("click", (e) => {
+    e.stopPropagation();
+    abrirOverlay(select);
+  });
+});
+
+function abrirOverlay(select) {
+  fecharOverlay();
+  selectAtual = select;
+  const label = select.previousElementSibling.innerText;
+  const opcoes = OPCOES[label] || [];
+  overlay.innerHTML = "";
+  opcoes.forEach((op, idx) => {
+    const div = document.createElement("mat-option");
+    div.innerText = op;
+    div.dataset.index = idx;
+    div.onclick = (ev) => {
+      ev.stopPropagation();
+      select.value = op;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      fecharOverlay();
+    };
+    overlay.appendChild(div);
+  });
+  const rect = select.getBoundingClientRect();
+  overlay.style.left = rect.left + "px";
+  overlay.style.top = (rect.bottom + window.scrollY) + "px";
+  overlay.classList.add("visible");
+}
+
+function fecharOverlay() {
+  overlay.classList.remove("visible");
+  selectAtual = null;
+}
+
+document.addEventListener("click", fecharOverlay);
+
+for (let i = 1; i <= 4; i++) {
+  document.getElementById("btn-proximo-" + i).addEventListener("click", () => {
+    const atual = document.getElementById("step-" + i);
+    const prox = document.getElementById("step-" + (i + 1));
+    if (atual && prox) {
+      atual.classList.remove("mat-horizontal-stepper-content-current");
+      prox.classList.add("mat-horizontal-stepper-content-current");
+    }
+  });
+}
+
+document.getElementById("btn-terminar").addEventListener("click", () => {
+  window.__terminar++;
+  if (MODO_ERRO) {
+    document.getElementById("erro-msg").style.display = "block";
+    return;
+  }
+  document.getElementById("toast").style.display = "block";
+  document.querySelector("#view-form h3").style.display = "none";
+  history.pushState(null, "", "?criado=1");
+});
+
+function mostrarStep(n) {
+  for (let i = 1; i <= 5; i++) {
+    const el = document.getElementById("step-" + i);
+    if (el) el.classList.remove("mat-horizontal-stepper-content-current");
+  }
+  const alvo = document.getElementById("step-" + n);
+  if (alvo) alvo.classList.add("mat-horizontal-stepper-content-current");
+}
+
+document.getElementById("btn-add-face").addEventListener("click", () => {
+  document.getElementById("dlg-face").style.display = "block";
+});
+document.getElementById("btn-salvar-face").addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  document.getElementById("dlg-face").style.display = "none";
+  document.getElementById("faces-lista").innerText = "1 faces";
+});
+document.getElementById("btn-cancelar-face").addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  document.getElementById("dlg-face").style.display = "none";
+});
+
+window.mockLinhas = linhas;
+window.mockFiltrar = filtrar;
+window.mockRenderTabela = renderTabela;
+window.mockFecharOverlay = fecharOverlay;
+</script>
+</body>
+</html>
